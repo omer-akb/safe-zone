@@ -15,11 +15,11 @@ to generate evidence for audits, incident response, and SIEM pipelines.
 End-to-end **security decision flow** (no LLM involved):
 
 User input  
-↓  
+v  
 `/detect` (TSZ guardrails enforced)  
-↓  
+v  
 Decision: **BLOCKED / ALLOWED**  
-↓  
+v  
 Audit log exported for SIEM
 
 ---

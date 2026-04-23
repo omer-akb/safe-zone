@@ -20,7 +20,7 @@ TSZ is a stateless **Go microservice** that exposes a REST API, backed by:
 Typical deployment:
 
 ```text
-[ Client / App ]  →  [ TSZ Gateway ]  →  [ LLM / External API ]
+[ Client / App ]  ->  [ TSZ Gateway ]  ->  [ LLM / External API ]
                          |    
                          +--> [ PostgreSQL ]
                          +--> [ Redis      ]
@@ -172,12 +172,16 @@ Cache invalidation is triggered when:
 
 ### 4.2 Authentication & Authorization
 
-- Core endpoints (`/detect`, `/patterns`, `/allowlist`, `/blacklist`, `/validators`, `/templates/import`) are usually exposed only to internal services.
-- Admin endpoints under `/admin` (e.g. `/admin/patterns/policy`) support an API key header:
+- TSZ provides built-in authentication and authorization middleware.
+- Protected endpoints use Bearer token auth when enabled:
 
   ```http
-  X-ADMIN-KEY: <ADMIN_API_KEY>
+  Authorization: Bearer <token>
   ```
+
+- Public endpoints are `/healthz` and `/ready` by default.
+- Endpoint permissions are scoped (`detect:read`, `gateway:use`, `patterns:admin`, `validators:admin`, `allowlist:admin`, `blacklist:admin`, `templates:admin`, `cache:admin`).
+- Admin compatibility with `X-ADMIN-KEY` remains available for legacy automation.
 
 - For production, we strongly recommend:
   - Wrapping TSZ behind your own **identity and access management** (OAuth2, OIDC, mTLS)

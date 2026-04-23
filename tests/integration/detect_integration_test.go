@@ -36,7 +36,7 @@ func TestDetect_PIIDetection_Email(t *testing.T) {
 	url := baseURL() + "/detect"
 	body := `{"text": "My email is test@example.com", "rid": "it-email-1"}`
 
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /detect failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestDetect_NonPII_AllowsAndNoDetections(t *testing.T) {
 	url := baseURL() + "/detect"
 	body := `{"text": "Hello world, nothing sensitive here", "rid": "it-nonpii-1"}`
 
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /detect failed: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDetect_InvalidJSON_BadRequest(t *testing.T) {
 	url := baseURL() + "/detect"
 	body := `{"text": "missing quote}`
 
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /detect failed: %v", err)
 	}

@@ -30,13 +30,22 @@ A default configuration is already provided in `docker-compose.yml` and `.env.ex
 Key environment variables:
 
 ```env
-APP_PORT=8080
-DB_HOST=db
-DB_PORT=5432
-DB_USER=thyris_user
-DB_PASSWORD=thyris_password
-DB_NAME=thyris_db
-REDIS_ADDR=redis:6379
+SERVER_PORT=8080
+DB_DSN=postgres://postgres:postgres@localhost:5432/thyris?sslmode=disable&TimeZone=Europe/Istanbul
+REDIS_URL=redis://:thyrisredis@localhost:6379/0
+
+# Security middleware
+SECURITY_HEADERS_ENABLED=true
+CORS_ENABLED=true
+MAX_REQUEST_SIZE_BYTES=10485760
+HANDLER_TIMEOUT_DETECT_SECONDS=30
+HANDLER_TIMEOUT_CHAT_SECONDS=300
+
+# AuthN/AuthZ (set true in production)
+AUTH_ENABLED=false
+AUTH_REQUIRE_BEARER_TOKEN=true
+AUTH_TOKEN_PERMISSIONS=token_detect=detect:read,token_admin=*
+AUTH_PUBLIC_PATHS=/healthz,/ready
 
 # AI Provider Configuration
 # Options: OPENAI_COMPATIBLE (default) or BEDROCK
@@ -127,6 +136,7 @@ Call the `/detect` endpoint with a simple text:
 ```bash
 curl -X POST http://localhost:8080/detect \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_detect" \
   -d '{
     "text": "Contact me at john@example.com regarding order #99281.",
     "rid": "RID-QUICKSTART-001",
@@ -134,6 +144,8 @@ curl -X POST http://localhost:8080/detect \
     "guardrails": []
   }'
 ```
+
+If `AUTH_ENABLED=false`, you can remove the `Authorization` header.
 
 Example response (simplified):
 
@@ -189,6 +201,11 @@ Then explore:
 - **Validators** – define AI guardrails like `TOXIC_LANGUAGE`
 - **Templates** – import pre‑packaged guardrail sets
 - **System** – check health, readiness and reload cache
+
+Set these Postman collection variables before running protected endpoints:
+
+- `base_url` (example: `http://localhost:8080`)
+- `tsz_bearer_token` (example: `token_admin` when auth is enabled)
 
 ---
 
@@ -300,7 +317,10 @@ summary, the usage pattern looks like this:
 ```python
 from tszclient_py import TSZClient, TSZConfig, ChatCompletionRequest
 
-client = TSZClient(TSZConfig(base_url="http://localhost:8080"))
+client = TSZClient(TSZConfig(
+    base_url="http://localhost:8080",
+    api_key="token_admin",  # optional; needed when AUTH_ENABLED=true
+))
 
 # /detect example
 resp = client.detect_text(
@@ -322,6 +342,13 @@ print(llm_resp["choices"][0]["message"]["content"])
 For a full working demo (including headers, RIDs and guardrails), see:
 
 - `examples/python-sdk-demo/main.py`
+
+If auth is enabled in TSZ, set `TSZ_AUTH_TOKEN` before running the demo:
+
+```bash
+export TSZ_AUTH_TOKEN=token_admin
+python -m examples.python-sdk-demo.main
+```
 
 ---
 

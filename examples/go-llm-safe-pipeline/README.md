@@ -14,10 +14,10 @@ any prompt is sent to an LLM.
 The example implements the following flow:
 
 User input
-→ TSZ /detect
-→ Redacted + validated prompt
-→ TSZ LLM Gateway
-→ Safe LLM response
+-> TSZ /detect
+-> Redacted + validated prompt
+-> TSZ LLM Gateway
+-> Safe LLM response
 
 
 All sensitive data is removed or neutralized inside TSZ,

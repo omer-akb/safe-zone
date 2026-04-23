@@ -15,7 +15,9 @@ type Attack struct {
 }
 
 func main() {
-	fmt.Println("\n=== TSZ LLM Red-Team Playground (Go) ===\n")
+	fmt.Println()
+	fmt.Println("=== TSZ LLM Red-Team Playground (Go) ===")
+	fmt.Println()
 
 	baseURL := os.Getenv("TSZ_BASE_URL")
 	if baseURL == "" {

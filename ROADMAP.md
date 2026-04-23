@@ -25,6 +25,10 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 **Goal:** Ensure the gateway is robust, testable and production‑ready for security‑sensitive (e.g. banking/PCI) adopters.
 
+**Reference:** See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for detailed security hardening plan (10 weeks, Q2-Q3 2026).
+
+### Subsection 1a: Functional Testing (Core Features)
+
 - [ ] Define a Phase 1 test strategy (risk‑based, bank/PCI‑ready):
   - [ ] Define test categories and entry/exit criteria (unit, integration, e2e, non‑functional, security)
   - [ ] Set minimal coverage expectations for critical flows (PII/PCI, allow/mask/block decisions)
@@ -39,6 +43,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [x] LLM gateway `/v1/chat/completions` including streaming and guardrail modes)
   - [x] Templates import + detection flow using built‑in template packs)
   - [ ] Allowlist/blocklist logic and pattern precedence)
+  - [x] Auth-enabled integration mode coverage (Bearer token / RBAC headers)
 - [x] Add end‑to‑end regression suites (CI‑friendly, runnable via `go test ./...` or `test-scripts/`):
   - [ ] Happy‑path flows for typical banking use cases (KYC, customer support chat, transaction memos, internal ops)
   - [x] Misuse/abuse scenarios (prompt injection, jailbreak attempts, sensitive data exfiltration)
@@ -59,6 +64,75 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 - [ ] Document performance characteristics, suggested resource sizing and the overall test strategy
 - [x] Add an end‑to‑end sanity test suite (initially `test-scripts/`, later `tests/e2e/`) that exercises patterns, allowlist/blocklist, validators, templates, admin APIs and the LLM gateway
 
+### Subsection 1b: Security Hardening (HTTP, Auth, Rate Limiting, Encryption, Audit Logging)
+
+**Status:** See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for full details and timeline.
+
+- [x] **Milestone 1: HTTP Security Hardening** (Weeks 1-2)
+  - [x] Add request size limits (10 MB default, configurable)
+  - [x] Enforce per-handler timeouts (/detect: 30s, /chat: 5m)
+  - [x] Configure HTTP server with ReadTimeout, WriteTimeout, MaxHeaderBytes
+  - [x] Add security headers middleware (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, HSTS, Cache-Control)
+  - [x] Add CORS middleware with configurable allowed origins
+  - [x] Add input validation middleware (Content-Type, JSON body validation)
+
+- [ ] **Milestone 2: Authentication & Authorization** (Weeks 2-3)
+  - [x] Create `internal/auth/auth.go` with Bearer token and API key validation
+  - [ ] Add `api_keys` database table with hashed tokens
+  - [x] Implement authentication middleware for all non-health endpoints
+  - [x] Define permission model (detect:read, gateway:use, patterns:admin, etc.)
+  - [x] Implement role-based access control (RBAC) enforcement
+  - [x] Protect admin endpoints (`/admin/*`) with admin role requirement
+  - [ ] Create API key management endpoints (create, list, revoke, rotate)
+
+- [ ] **Milestone 3: Rate Limiting & DDoS Protection** (Week 3-4)
+  - [x] Implement global rate limiter in `internal/middleware/ratelimit.go`
+  - [x] Configure per-endpoint rate limits (/detect: 1000 req/min, /chat: 100 req/min, /patterns: 50 req/min, /admin: 10 req/min)
+  - [ ] Store rate limit state in Redis for distributed limiting
+  - [x] Return 429 Too Many Requests on limit exceeded
+  - [x] Implement IP-based and key-based rate limiting
+
+- [ ] **Milestone 4: Data Protection & Encryption** (Weeks 4-5)
+  - [ ] Make TLS/HTTPS mandatory (port 8443, TLS 1.3 minimum)
+  - [ ] Implement HTTP -> HTTPS redirect on port 80
+  - [ ] Configure database connections with SSL mode (sslmode=require)
+  - [ ] Configure Redis with TLS
+  - [ ] Implement hashing + salting for API keys
+  - [ ] Encrypt sensitive fields in database (optional: per-field encryption)
+  - [ ] Remove all hardcoded credentials from code and configs
+
+- [ ] **Milestone 5: Audit Logging & Monitoring** (Weeks 5-6)
+  - [ ] Create `audit_logs` database table with fields for user, action, resource, IP, timestamp
+  - [ ] Log authentication events (successful/failed login, suspicious patterns)
+  - [ ] Log authorization events (permission granted/denied, unauthorized attempts)
+  - [ ] Log data access events (CRUD operations on patterns, validators, allowlist/blocklist)
+  - [ ] Implement structured JSON logging in `internal/middleware/logging.go`
+  - [ ] Enhance SIEM integration to forward audit logs (new `internal/guardrails/siem.go` features)
+  - [ ] Implement log retention and rotation policies
+
+- [ ] **Milestone 6: Vulnerability Management** (Week 6-7)
+  - [ ] Add GitHub Actions workflow for `govulncheck` (golang.org/x/vuln)
+  - [ ] Add `gosec` (Go security analyzer) to CI/CD
+  - [ ] Add OWASP dependency-check to CI/CD pipeline
+  - [ ] Enable GitHub Dependabot or Renovate for automated dependency updates
+  - [ ] Add Trivy for container image scanning
+  - [ ] Define security SLA for vulnerability fixes (CRITICAL: 24h, HIGH: 7d, MEDIUM: 30d)
+
+- [ ] **Milestone 7: Production Hardening & Deployment** (Week 7-8)
+  - [ ] Remove default credentials from `docker-compose.yml` and `init.sql`
+  - [ ] Document recommended network topology (reverse proxy, TLS termination, private subnets)
+  - [ ] Run containers as non-root user
+  - [ ] Set resource limits in Docker/Kubernetes (memory, CPU)
+  - [ ] Add security tests in `tests/security/` (auth bypass, authz bypass, injection resistance)
+  - [ ] Implement automated secret rotation (90 days for API keys/DB passwords, 30 days for certs)
+
+- [ ] **Milestone 8: Documentation & Guidelines** (Week 8)
+  - [ ] Create `docs/SECURITY_OPERATIONS.md` (deployment, API key management, TLS setup, secrets management, monitoring)
+  - [x] Update `docs/ARCHITECTURE_SECURITY.md` with auth, rate limiting, and audit logging details
+  - [x] Add authentication examples to `docs/API_REFERENCE.md`
+  - [ ] Create `docs/RUNBOOKS.md` with incident response procedures
+  - [x] Update `CONTRIBUTING.md` with security checklist for PRs
+
 ---
 
 ## Phase 2 – Developer Experience & SDKs
@@ -68,6 +142,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 - [x] Design a simple, stable public API contract (documented in `docs/API_REFERENCE.md`, including `/detect`, LLM gateway and configuration endpoints)
 - [x] Create Go client helper (`tszclient-go`) for gateway and `/detect`
 - [x] Create Python client (`tszclient-py`) with simple `detect()` and gateway helpers
+- [x] Align Go/Python SDK authentication behavior with TSZ Bearer token + legacy admin-key compatibility
 - [ ] Create Node/TypeScript client
 - [x] Publish Go client usage documentation under `pkg/tszclient-go/README.md`
 - [x] Add `examples/` directory with:
@@ -101,18 +176,21 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 ## Phase 4 – Observability & Operations
 
-**Goal:** Make TSZ easy to run and operate in production.
+**Goal:** Make TSZ easy to run and operate in production, with full visibility into security events and system health.
 
 - [ ] Add Prometheus metrics endpoint (e.g. `/metrics`):
   - [ ] Request count / latency per endpoint
   - [ ] Blocked vs allowed requests
   - [ ] Detection counts per pattern/category
+  - [ ] Authentication and rate limiting metrics
 - [ ] Provide example Grafana dashboards
-- [ ] Improve logging structure (JSON logs option, log levels)
+- [ ] Improve logging structure (JSON logs option, log levels, centralized log forwarding)
 - [ ] Provide production‑ready Helm chart / K8s manifests
 - [x] Document backup & disaster recovery for PostgreSQL and Redis (see `docs/ARCHITECTURE_SECURITY.md`)
 - [x] Add security event model and SIEM webhook integration for guardrail decisions (`internal/models/security_event.go`, `internal/guardrails/siem.go`, `SIEM_WEBHOOK_URL`)
+- [ ] Enhance SIEM/webhook integration to include authentication, authorization, and audit events
 - [ ] Document SIEM/webhook integration patterns and example dashboards
+- [ ] Add alerting rules template for detection of suspicious activity (brute force, rate limit exceeding, privilege escalation)
 
 ---
 
@@ -137,16 +215,27 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 ---
 
-## Phase 6 – Security & Compliance
+## Phase 6 – Security Certifications & Compliance
 
-**Goal:** Build trust with security‑sensitive users.
+**Goal:** Build trust with enterprise and regulated customers through formal security certifications and compliance documentation.
 
+**Note:** Phase 1 (Core Product Hardening) must be completed first. See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for the detailed security roadmap.
+
+- [ ] Perform a formal threat model and risk assessment (document in `docs/THREAT_MODEL.md`)
+- [ ] Commission or plan for an external security audit / penetration test by a third-party firm
 - [x] Document recommended deployment patterns and network topologies (VPC/private subnets, API gateways, WAFs, mTLS, service meshes) in `docs/ARCHITECTURE_SECURITY.md`
 - [ ] Provide configuration examples:
   - [ ] NGINX / Traefik / Envoy integration for TLS and auth
   - [ ] mTLS / service‑mesh deployment examples
-- [ ] Perform a basic threat model and document key risks and mitigations
-- [ ] (Stretch) Commission or plan for an external security review / audit
+  - [ ] Example Kubernetes network policies
+- [ ] Build SOC2 Type II readiness:
+  - [ ] Document control objectives and implementations
+  - [ ] Establish audit trail and logging
+  - [ ] Define SLAs for incident response and patching
+- [ ] Prepare for industry certifications:
+  - [ ] Plan for SOC2 Type II audit (12-month audit period)
+  - [ ] Plan for FedRAMP compliance (if applicable for US government customers)
+  - [ ] Consider GDPR/CCPA compliance documentation
 
 ---
 

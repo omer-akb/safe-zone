@@ -13,13 +13,13 @@ This example demonstrates how TSZ (Thyris Safe Zone) secures a Retrieval-Augment
 End-to-end secured RAG flow:
 ```bash
 User Query
-      ↓
+      v
 Document Retrieval
-      ↓
+      v
 TSZ /detect (guardrails enforced)
-      ↓
+      v
 Decision: ALLOWED / BLOCKED
-      ↓
+      v
 LLM called ONLY if allowed
 ```
 ---
@@ -100,18 +100,18 @@ Message: Error in guardrail 'PII'
 Overall confidence: 0.84
 
 [DETECTIONS]
-- EMAIL → john@example.com
-- US_SSN → 123-45-6789
+- EMAIL -> john@example.com
+- US_SSN -> 123-45-6789
 
-[LLM] ❌ Blocked by TSZ
+[LLM] No Blocked by TSZ
 ```
 ---
 
 ## Why TSZ Blocked This
 Detected
 ```bash
-john@example.com  → EMAIL
-123-45-6789       → SSN
+john@example.com  -> EMAIL
+123-45-6789       -> SSN
 ```
 Security risks
 

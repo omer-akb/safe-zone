@@ -9,7 +9,7 @@ This example protects **Gemma 3 running on Ollama** using TSZ guardrails.
 ## Architecture
 
 ```bash
-User → TSZ Gateway → Ollama (Gemma 3)
+User -> TSZ Gateway -> Ollama (Gemma 3)
 ```
 
 TSZ inspects:
@@ -66,7 +66,7 @@ python main.py
 ---
 ## Example Output
 ```bash
-❌ REQUEST BLOCKED BY TSZ
+No REQUEST BLOCKED BY TSZ
 Content blocked by security policy: EMAIL
 ```
 ---

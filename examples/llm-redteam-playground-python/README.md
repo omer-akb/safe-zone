@@ -16,11 +16,11 @@ This is **not a toy demo** — it mirrors how TSZ is used in production security
 End-to-end LLM safety flow:
 
 User input + attack
-↓
+v
 /detect (TSZ guardrails enforced)
-↓
+v
 Decision: ALLOWED or BLOCKED
-↓
+v
 LLM execution only if allowed
 
 Key capabilities demonstrated:
@@ -121,7 +121,7 @@ Prompt Injection (Policy-Based Block)
 [BLOCK_SOURCE] POLICY_VALIDATOR
 [REASONS] PROMPT_INJECTION_SIMPLE
 [CONFIDENCE] 1.00
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```
 
 Data Exfiltration (Detection-Based Block)
@@ -132,5 +132,5 @@ Data Exfiltration (Detection-Based Block)
 [BLOCK_SOURCE] DETECTION
 [REASONS] EMAIL, CREDIT_CARD
 [CONFIDENCE] 0.77
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```

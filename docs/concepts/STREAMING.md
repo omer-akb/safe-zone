@@ -37,9 +37,9 @@ X-TSZ-Guardrails-Mode: final-only | stream-sync | stream-async
 
 Internally, the gateway interprets this as:
 
-- `final-only`  → input guardrails + optional non-stream output guardrails; streaming output is proxied as-is
-- `stream-sync` → input guardrails + **incremental output guardrails** while streaming
-- `stream-async` → input guardrails + **async output guardrails** after stream completion
+- `final-only`  -> input guardrails + optional non-stream output guardrails; streaming output is proxied as-is
+- `stream-sync` -> input guardrails + **incremental output guardrails** while streaming
+- `stream-async` -> input guardrails + **async output guardrails** after stream completion
 
 ### 2.2 On-fail Behaviour (Streaming Only)
 

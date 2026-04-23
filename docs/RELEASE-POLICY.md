@@ -129,7 +129,7 @@ It is **manually triggered** via `workflow_dispatch`.
 1. Push your changes to the desired branch (e.g., `main` or a release branch).
 
 2. In GitHub:
-   - Go to the repository → **Actions** tab.
+   - Go to the repository -> **Actions** tab.
    - Select the **`Product Release`** workflow.
    - Click **“Run workflow”**.
 
@@ -162,7 +162,7 @@ Steps:
 1. Determine the last `thyris-sz-v*` tag (if any).
 2. Check if there are changes **outside** client directories since the last tag:
    - Includes: everything except `pkg/tszclient-go`, `pkg/tszclient_py`.
-3. If no changes → skip release.
+3. If no changes -> skip release.
 4. Otherwise:
    - Compute new version according to `bump`.
    - Run tests:
@@ -188,7 +188,7 @@ Steps:
 2. Check if there are changes since the last tag in:
    - `pkg/tszclient-go/**`
    - `tests/unit/tszclient_go_chat_test.go`
-3. If no changes → skip release.
+3. If no changes -> skip release.
 4. Otherwise:
    - Compute new version according to `bump`.
    - Run tests (shared test tree, with test build tag):
@@ -219,7 +219,7 @@ Steps:
 2. Check if there are changes since the last tag in:
    - `pkg/tszclient_py/**`
    - `pyproject.toml`
-3. If no changes → skip release.
+3. If no changes -> skip release.
 4. Otherwise:
    - Read current `[project].version` from `pyproject.toml`.
    - Compute new version according to `bump` and update `pyproject.toml`.

@@ -24,12 +24,21 @@ class TSZConfig:
     session: Optional[requests.Session]
         Optional custom :class:`requests.Session`. If ``None``, a
         short‑lived session is created per request.
+    api_key: Optional[str]
+        Optional TSZ auth token. If set, the client sends both:
+
+        - ``Authorization: Bearer <api_key>``
+        - ``X-ADMIN-KEY: <api_key>`` (legacy compatibility)
+
+        This mirrors the Go client behavior and works with both RBAC token
+        auth and legacy admin-key based flows.
     timeout: float
         Timeout in seconds for HTTP requests. Defaults to 60.0s.
     """
 
     base_url: str
     session: Optional[requests.Session] = None
+    api_key: Optional[str] = None
     timeout: float = 60.0
 
 
@@ -170,6 +179,7 @@ class TSZClient:
             raise ValueError("base_url is required")
         self._base_url = _normalize_base_url(config.base_url)
         self._session = config.session
+        self._api_key = (config.api_key or "").strip()
         self._timeout = config.timeout or 60.0
 
     # --- /detect ---------------------------------------------------------
@@ -190,6 +200,7 @@ class TSZClient:
             path="/detect",
             body=req.to_payload(),
             headers=headers,
+            api_key=self._api_key,
             session=self._session,
             timeout=self._timeout,
         )
@@ -227,6 +238,7 @@ class TSZClient:
             path="/v1/chat/completions",
             body=req.to_payload(),
             headers=headers,
+            api_key=self._api_key,
             session=self._session,
             timeout=self._timeout,
         )
@@ -252,6 +264,7 @@ def _post_json(
     path: str,
     body: Mapping[str, Any],
     headers: Optional[Mapping[str, str]],
+    api_key: str,
     session: Optional[requests.Session],
     timeout: float,
 ) -> Dict[str, Any]:
@@ -259,6 +272,9 @@ def _post_json(
 
     payload = json.dumps(body).encode("utf-8")
     all_headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        all_headers["Authorization"] = f"Bearer {api_key}"
+        all_headers["X-ADMIN-KEY"] = api_key
     if headers:
         all_headers.update(headers)
 

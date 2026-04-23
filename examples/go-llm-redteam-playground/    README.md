@@ -21,15 +21,15 @@ This is **not a toy demo** — it mirrors how TSZ is used in
 
 User input + attack
 
-↓
+v
 
 /detect (TSZ guardrails enforced)
 
-↓
+v
 
 Decision: ALLOWED or BLOCKED
 
-↓
+v
 
 LLM execution only if allowed
 
@@ -143,7 +143,7 @@ go run .
 [BLOCK_SOURCE] POLICY_VALIDATOR
 [REASONS] PROMPT_INJECTION_POLICY
 [CONFIDENCE] 1.00
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```
 
 ## Why This Example Matters

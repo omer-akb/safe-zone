@@ -80,9 +80,10 @@ func TestCLI_Patterns_List(t *testing.T) {
 
 func TestCLI_Allowlist_Lifecycle(t *testing.T) {
 	val := "cli-allow-test"
+	key := testAdminKey()
 
 	// 1. Add
-	out := runCLI(t, "allowlist", "add", "--value", val, "--desc", "Created by CLI test", "--key", "test-admin-key")
+	out := runCLI(t, "allowlist", "add", "--value", val, "--desc", "Created by CLI test", "--key", key)
 	if !strings.Contains(out, "created successfully") {
 		t.Errorf("Expected success message, got:\n%s", out)
 	}

@@ -17,11 +17,11 @@ This is **not a toy demo** — it mirrors how TSZ is used in
 An end-to-end **LLM data safety flow**:
 
 User input + exfiltration attempt
-↓
+v
 /detect (TSZ scans & enforces guardrails)
-↓
+v
 Decision: ALLOWED or BLOCKED
-↓
+v
 LLM execution only if allowed
 
 
@@ -164,5 +164,5 @@ Data Exfiltration (Detection-Based Block)
 [BLOCK_SOURCE] DETECTION
 [REASONS] CREDIT_CARD, EMAIL
 [CONFIDENCE] 0.60
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```

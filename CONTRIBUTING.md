@@ -29,6 +29,7 @@ Before working on larger features, we recommend reading:
 - `docs/WHAT_IS_TSZ.md`
 - `docs/ARCHITECTURE_SECURITY.md`
 - `docs/API_REFERENCE.md`
+- `docs/SECURITY_ROADMAP.md` – **Must read for security hardening context**
 - `ROADMAP.md`
 
 ---
@@ -174,6 +175,20 @@ We prefer:
 - Small, reviewable PRs over large “mega‑PRs”
 - Clear commit messages that explain the intent
 - Early drafts / WIP PRs for larger refactors, so we can discuss design
+
+## Security Checklist (For PRs)
+
+Before opening a PR, ensure:
+
+- No hardcoded secrets (API keys, passwords, tokens) in code, examples, tests or docs.
+- Sensitive data is not logged (tokens, credentials, raw PII/card numbers).
+- New/changed endpoints follow auth model (`AUTH_ENABLED`, RBAC permissions, public path rules).
+- Admin-sensitive operations are authorization-protected and test-covered (allowed + denied cases).
+- Input handling validates method/content type/body and does not expose internal details in errors.
+- DB access uses parameterized queries (no string-concatenated SQL).
+- Security-related config changes are documented in `.env.example` and relevant docs.
+- Tests are updated (`go test ./tests/unit/...` plus relevant integration/e2e suites).
+- If security behavior changes, `docs/API_REFERENCE.md`, `docs/ARCHITECTURE_SECURITY.md`, and `docs/SECURITY_ROADMAP.md` are updated.
 
 ---
 

@@ -45,7 +45,7 @@ func TestDetect_PIIMatrixFromFixtures(t *testing.T) {
 			url := baseURL() + "/detect"
 			body := `{"text": "` + strings.ReplaceAll(c.Text, "\"", "\\\"") + `", "rid": "pii-matrix-` + c.Name + `"}`
 
-			resp, err := http.Post(url, "application/json", strings.NewReader(body))
+			resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 			if err != nil {
 				t.Fatalf("POST /detect failed: %v", err)
 			}

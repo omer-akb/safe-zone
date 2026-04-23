@@ -18,16 +18,16 @@ This mirrors **real production security rollouts** where teams **observe first**
 End-to-end flow:
 ```bash
 User input
-↓
+v
 
 TSZ /detect
-↓
+v
 
 Risk detected (PII / Injection)
-↓
+v
 
 Decision: ALLOWED (monitoring mode)
-↓
+v
 
 Security telemetry exported to OpenTelemetry
 ```

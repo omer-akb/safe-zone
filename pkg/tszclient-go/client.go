@@ -22,7 +22,7 @@ import (
 // If nil, a default client with 60s timeout will be used.
 type Config struct {
 	BaseURL    string
-	APIKey     string // Optional Admin API Key
+	APIKey     string // Optional token; sent as Bearer and X-ADMIN-KEY (compat)
 	HTTPClient *http.Client
 }
 
@@ -264,9 +264,7 @@ func postJSON[T any](
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-ADMIN-KEY", c.apiKey)
-	}
+	setAuthHeaders(req, c.apiKey)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -309,9 +307,7 @@ func getJSON[T any](
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-ADMIN-KEY", c.apiKey)
-	}
+	setAuthHeaders(req, c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -350,9 +346,7 @@ func deleteRequest(
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.apiKey != "" {
-		req.Header.Set("X-ADMIN-KEY", c.apiKey)
-	}
+	setAuthHeaders(req, c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -366,4 +360,12 @@ func deleteRequest(
 	}
 
 	return nil
+}
+
+func setAuthHeaders(req *http.Request, token string) {
+	if req == nil || strings.TrimSpace(token) == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-ADMIN-KEY", token)
 }

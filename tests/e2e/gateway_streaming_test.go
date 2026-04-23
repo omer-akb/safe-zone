@@ -28,6 +28,7 @@ func streamRequest(t *testing.T, payload map[string]interface{}, headers map[str
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	applyE2EAuthHeaders(req)
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)

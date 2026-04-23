@@ -13,10 +13,10 @@ PII detection and prompt injection protection **before** any LLM is called.
 The example implements the following flow:
 
 User input
-→ TSZ /detect
-→ Redacted + validated prompt
-→ TSZ LLM Gateway (/v1/chat/completions)
-→ Safe LLM response
+-> TSZ /detect
+-> Redacted + validated prompt
+-> TSZ LLM Gateway (/v1/chat/completions)
+-> Safe LLM response
 
 
 All sensitive data is removed or neutralized **inside TSZ** before the

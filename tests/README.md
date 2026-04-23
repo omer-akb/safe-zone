@@ -102,7 +102,7 @@ Currently covered:
     - Verifies that a known input containing email + SSN produces detections for `EMAIL` and `US_SSN`.
 
 - `templates_integration_test.go`
-  - `/templates/import` → `/detect` flow:
+  - `/templates/import` -> `/detect` flow:
     - Imports a simple template with one pattern and one validator.
     - Verifies that a `/detect` call after import triggers the new pattern.
 
@@ -137,8 +137,8 @@ Currently covered:
 
 - `sanity_suite_test.go`
   - Health and readiness:
-    - `GET /healthz` → 200
-    - `GET /ready` → 200 (DB + Redis ready)
+    - `GET /healthz` -> 200
+    - `GET /ready` -> 200 (DB + Redis ready)
   - Configuration APIs:
     - `GET /patterns`
     - `GET /validators`
@@ -171,10 +171,17 @@ go test ./tests/unit/...
 
 # Integration tests (require TSZ + DB + Redis)
 export TSZ_BASE_URL=http://localhost:8080
+# Optional (when AUTH_ENABLED=true on TSZ):
+# export TSZ_TEST_BEARER_TOKEN=token_admin
+# export TSZ_TEST_ADMIN_KEY=test-admin-key
 go test ./tests/integration/...
 
 # E2E smoke + streaming (require TSZ + DB + Redis)
 export TSZ_BASE_URL=http://localhost:8080
+# Optional (for CLI/client admin-key based commands):
+# export TSZ_TEST_ADMIN_KEY=test-admin-key
+# Optional (for raw HTTP E2E requests when auth is enabled):
+# export TSZ_TEST_BEARER_TOKEN=token_admin
 go test ./tests/e2e/...
 ```
 

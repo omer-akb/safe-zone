@@ -11,6 +11,7 @@ It demonstrates both:
 Prerequisites:
 - TSZ is running locally and accessible at http://localhost:8080
 - The upstream LLM is configured and reachable (see main README/QUICK_START)
+- If TSZ auth is enabled, set `TSZ_AUTH_TOKEN` (for example: `token_admin`)
 - `AI_MODEL` (or `TSZ_MODEL`) is set in your TSZ environment – the same
   model name is used here for the demo call.
 - The Python client is installed, for example:
@@ -35,8 +36,9 @@ from tszclient_py import (
 
 def main() -> None:
     base_url = os.getenv("TSZ_BASE_URL", "http://localhost:8080")
+    auth_token = os.getenv("TSZ_AUTH_TOKEN", "")
 
-    client = TSZClient(TSZConfig(base_url=base_url))
+    client = TSZClient(TSZConfig(base_url=base_url, api_key=auth_token or None))
 
     # --- /detect example -------------------------------------------------
     print("[DETECT] Calling /detect via Python client...")

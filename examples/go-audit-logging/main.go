@@ -33,7 +33,9 @@ func parseConfidence(s string) float64 {
 }
 
 func main() {
-	fmt.Println("\n=== TSZ Audit Logging & SIEM Export Demo (Go) ===\n")
+	fmt.Println()
+	fmt.Println("=== TSZ Audit Logging & SIEM Export Demo (Go) ===")
+	fmt.Println()
 
 	cfg := tszclient.Config{
 		BaseURL: os.Getenv("TSZ_BASE_URL"),
@@ -108,6 +110,7 @@ func main() {
 	data, _ := json.MarshalIndent(logs, "", "  ")
 	_ = os.WriteFile("audit_log.json", data, 0644)
 
-	fmt.Println("\n✅ Audit log written to audit_log.json")
-	fmt.Println("✅ Ready for SIEM ingestion\n")
+	fmt.Println()
+	fmt.Println("✅ Audit log written to audit_log.json")
+	fmt.Println("✅ Ready for SIEM ingestion")
 }

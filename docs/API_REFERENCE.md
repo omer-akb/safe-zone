@@ -30,19 +30,51 @@ Content-Type: application/json
 
 **Authentication**
 
-Most endpoints are not authenticated by default and are intended to run inside a trusted VPC / internal network. A subset of **admin** endpoints uses an API key header:
+TSZ supports middleware-based authentication and RBAC.
 
 ```http
-X-ADMIN-KEY: <admin-api-key>
+Authorization: Bearer <tsz-token>
 ```
 
-The key is configured via environment variable:
+Authentication behavior is controlled via:
 
 ```env
-ADMIN_API_KEY=your-secure-admin-key
+AUTH_ENABLED=false
+AUTH_REQUIRE_BEARER_TOKEN=true
+AUTH_TOKEN_PERMISSIONS=token_detect=detect:read,token_admin=*
+AUTH_PUBLIC_PATHS=/healthz,/ready
 ```
 
-You are strongly encouraged to **place TSZ behind your own API Gateway / mTLS / WAF** for external exposure.
+- `AUTH_ENABLED=false` (default): open endpoints (recommended only for trusted internal networks).
+- `AUTH_ENABLED=true`: all non-public endpoints require a valid token with matching permissions.
+- Public endpoints are `/healthz` and `/ready` by default.
+- Legacy `X-ADMIN-KEY` compatibility remains available for admin handlers.
+
+Permissions:
+
+- `detect:read`
+- `gateway:use`
+- `patterns:admin`
+- `validators:admin`
+- `allowlist:admin`
+- `blacklist:admin`
+- `templates:admin`
+- `cache:admin`
+
+**Request Security Controls**
+
+- Write endpoints require `Content-Type: application/json`.
+- Request body size limit is enabled (default: 10 MB, configurable with `MAX_REQUEST_SIZE_BYTES`).
+- Per-endpoint timeouts are enforced (default: `/detect` 30s, `/v1/chat/completions` 300s).
+- CORS is fail-secure by default (`CORS_ALLOWED_ORIGINS` empty => deny).
+- Security headers middleware is enabled by default (`SECURITY_HEADERS_ENABLED=true`).
+
+**Rate Limiting**
+
+- Global and endpoint-level limits are enabled by default.
+- Exceeded quotas return `429 Too Many Requests`.
+
+You are strongly encouraged to place TSZ behind your own API Gateway / mTLS / WAF for external exposure.
 
 ---
 
@@ -62,9 +94,9 @@ TSZ uses a hybrid confidence system for both PII detection and guardrail evaluat
   CONFIDENCE_BLOCK_THRESHOLD=0.85
   ```
 
-  - `< 0.30`  → **ALLOW** (ignored)
-  - `0.30 – 0.85` → **MASK** (redact in output)
-  - `≥ 0.85` → **AUTO‑BLOCK**
+  - `< 0.30`  -> **ALLOW** (ignored)
+  - `0.30 – 0.85` -> **MASK** (redact in output)
+  - `≥ 0.85` -> **AUTO‑BLOCK**
 
 - **AI Confidence Cache:**
   - AI scoring is cached in Redis (TTL 24h) for performance and cost efficiency.
@@ -91,6 +123,9 @@ TSZ uses a hybrid confidence system for both PII detection and guardrail evaluat
 ```http
 POST /detect
 ```
+
+Auth requirement:
+- If `AUTH_ENABLED=true`, requires permission `detect:read`.
 
 This is the **primary production endpoint**. It performs:
 
@@ -163,7 +198,7 @@ Top‑level fields:
 - `redacted_text`: The input `text` with detected entities replaced with placeholders (e.g. `[EMAIL]`). Omitted if nothing is redacted.
 - `detections`: Array of **DetectionResult** objects (see below).
 - `validator_results`: Array of **ValidatorResult** objects for any executed guardrails.
-- `breakdown`: Map of detection type → count. Example: `{ "EMAIL": 2, "PHONE_NUMBER": 1 }`.
+- `breakdown`: Map of detection type -> count. Example: `{ "EMAIL": 2, "PHONE_NUMBER": 1 }`.
 - `blocked`: Boolean flag indicating whether TSZ considers this request **unsafe**. If `true`, you should treat this as a hard block.
 - `contains_pii`: `true` if any PII or sensitive entity was detected.
 - `overall_confidence`: Confidence score for the overall risk.
@@ -251,6 +286,9 @@ TSZ can also act as an **OpenAI-compatible gateway** for chat models. This allow
 ```http
 POST /v1/chat/completions
 ```
+
+Auth requirement:
+- If `AUTH_ENABLED=true`, requires permission `gateway:use`.
 
 TSZ implements the **request and response shape** of the OpenAI `chat/completions` endpoint for both non‑streaming (`stream=false`) and streaming (`stream=true`) calls. Streaming support depends on the selected provider; for example, `AI_PROVIDER=BEDROCK` currently supports **non-streaming only**.
 
@@ -389,6 +427,7 @@ TSZ gateway supports additional headers for observability and guardrails:
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_gateway" \
   -H "X-TSZ-RID: RID-GW-001" \
   -H "X-TSZ-Guardrails: TOXIC_LANGUAGE" \
   -d '{
@@ -424,6 +463,7 @@ Behaviour:
 ```bash
 curl -N -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_gateway" \
   -H "X-TSZ-RID: RID-GW-STREAM-BASE" \
   -d '{
     "model": "llama3.1:8b",
@@ -441,6 +481,7 @@ curl -N -X POST http://localhost:8080/v1/chat/completions \
 ```bash
 curl -N -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_gateway" \
   -H "X-TSZ-RID: RID-GW-STREAM-FILTER" \
   -H "X-TSZ-Guardrails: TOXIC_LANGUAGE,PII" \
   -H "X-TSZ-Guardrails-Mode: stream-sync" \
@@ -462,6 +503,7 @@ curl -N -X POST http://localhost:8080/v1/chat/completions \
 ```bash
 curl -N -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_gateway" \
   -H "X-TSZ-RID: RID-GW-STREAM-HALT" \
   -H "X-TSZ-Guardrails: TOXIC_LANGUAGE,PII" \
   -H "X-TSZ-Guardrails-Mode: stream-sync" \
@@ -482,6 +524,7 @@ curl -N -X POST http://localhost:8080/v1/chat/completions \
 ```bash
 curl -N -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer token_gateway" \
   -H "X-TSZ-RID: RID-GW-STREAM-ASYNC" \
   -H "X-TSZ-Guardrails: TOXIC_LANGUAGE,PII" \
   -H "X-TSZ-Guardrails-Mode: stream-async" \
@@ -506,7 +549,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8080/v1",  # TSZ gateway
-    api_key="dummy-key"  # TSZ does not use this; upstream key comes from env
+    api_key="token_gateway"  # TSZ auth token when AUTH_ENABLED=true
 )
 
 # Non-streaming example
@@ -641,6 +684,9 @@ policy via configuration.
 
 Patterns represent **regex‑based detection rules** for PII, secrets, or other structured signals.
 
+Auth requirement:
+- If `AUTH_ENABLED=true`, all `/patterns` endpoints require `patterns:admin`.
+
 ### 4.1 Create Pattern
 
 **Endpoint**
@@ -731,6 +777,9 @@ Path parameters:
 
 Allowlist items represent **trusted values** that should be ignored during detection.
 
+Auth requirement:
+- If `AUTH_ENABLED=true`, all `/allowlist` endpoints require `allowlist:admin`.
+
 ### 5.1 Create Allowlist Item
 
 **Endpoint**
@@ -793,6 +842,9 @@ Path parameters:
 
 Blocklist (blacklist) items represent **explicitly forbidden values** that should be hard‑blocked.
 
+Auth requirement:
+- If `AUTH_ENABLED=true`, all `/blacklist` endpoints require `blacklist:admin`.
+
 ### 6.1 Create Blocklist Item
 
 **Endpoint**
@@ -854,6 +906,9 @@ Path parameters:
 ## 7. Format Validators & Guardrails API
 
 Format validators define **dynamic validation rules** (including AI‑powered guardrails) that can be invoked via the `/detect` endpoint.
+
+Auth requirement:
+- If `AUTH_ENABLED=true`, all `/validators` endpoints require `validators:admin`.
 
 ### 7.1 Validator Model
 
@@ -940,6 +995,9 @@ Path parameters:
 ## 8. Guardrail Templates API
 
 Guardrail templates are **portable collections** of patterns and validators, enabling you to roll out complex policies with a single import.
+
+Auth requirement:
+- If `AUTH_ENABLED=true`, `/templates/import` requires `templates:admin`.
 
 ### 8.1 Import Template
 
@@ -1042,6 +1100,9 @@ Checks:
 POST /admin/reload
 ```
 
+Auth requirement:
+- If `AUTH_ENABLED=true`, requires `cache:admin` permission.
+
 **Description**
 
 Manually clears in‑memory / Redis‑backed caches so that changes in the database are reflected immediately.
@@ -1050,45 +1111,15 @@ Current behaviour (subject to extension):
 
 - Clears pattern cache
 - Clears allowlist cache
+- Clears blocklist cache
 
 **Responses**
 
-- `200 OK` with an empty body on success.
+- `200 OK` with JSON payload:
+  - `{"status":"ok","message":"All caches cleared"}`
 - `405 Method Not Allowed` if called with a non‑POST method.
-
-### 9.4 Update Pattern Policy (Admin)
-
-**Endpoint**
-
-```http
-POST /admin/patterns/policy
-```
-
-**Authentication**
-
-Requires a valid admin API key header:
-
-```http
-X-ADMIN-KEY: <ADMIN_API_KEY>
-```
-
-**Request Body**
-
-```json
-{
-  "pattern_id": 1,
-  "block_threshold": 0.9,
-  "allow_threshold": 0.2
-}
-```
-
-**Responses**
-
-- `200 OK` with updated pattern info
-- `400 Bad Request` if JSON is invalid
-- `401 Unauthorized` if admin key is missing/invalid
-- `404 Not Found` if pattern does not exist
-- `500 Internal Server Error` on persistence error
+- `401 Unauthorized` if auth is enabled and token/key is missing or invalid.
+- `403 Forbidden` if token lacks `cache:admin`.
 
 ---
 
@@ -1230,6 +1261,7 @@ Example structure as exposed by the current implementation:
 
 - **Security**
   - Run TSZ inside a private network segment.
+  - Enable built-in auth (`AUTH_ENABLED=true`) and assign least-privilege token permissions.
   - Protect admin endpoints (`/admin/*`) via API gateway auth, network policies, or mTLS.
   - Consider enabling request/response logging only in controlled environments, as logs may contain redacted but still sensitive patterns.
 

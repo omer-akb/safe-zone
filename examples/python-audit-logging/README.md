@@ -13,10 +13,10 @@ security reviews, compliance, and SIEM ingestion.
 End-to-end audit flow:
 
 User input  
-→ TSZ `/detect`  
-→ Security decision (BLOCKED / ALLOWED)  
-→ Structured audit log  
-→ SIEM-ready JSON export
+-> TSZ `/detect`  
+-> Security decision (BLOCKED / ALLOWED)  
+-> Structured audit log  
+-> SIEM-ready JSON export
 
 ---
 

@@ -41,6 +41,7 @@ func TestGateway_SafePrompt_AllowsAndReturnsChoices(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-TSZ-RID", "GW-IT-SAFE-1")
+	applyTestAuthHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -83,6 +84,7 @@ func TestGateway_UnsafePrompt_WithGuardrailsMayBlockOrAnnotate(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-TSZ-RID", "GW-IT-UNSAFE-1")
 	req.Header.Set("X-TSZ-Guardrails", "TOXIC_LANGUAGE")
+	applyTestAuthHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

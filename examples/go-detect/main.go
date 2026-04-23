@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	tszclient "thyris-sz/pkg/tszclient-go"
+	tszclient "github.com/thyrisAI/safe-zone/pkg/tszclient-go"
 )
 
 func main() {

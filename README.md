@@ -53,6 +53,8 @@ For all user and customer‑facing documentation, see the `docs/` directory:
   `docs/API_REFERENCE.md`
 - **Architecture & Security Overview** – Architecture, data flows, security controls  
   `docs/ARCHITECTURE_SECURITY.md`
+- **Security Roadmap** – Current security hardening plan and milestones  
+  `docs/SECURITY_ROADMAP.md`
 - **Postman Collection** – Ready‑to‑use collection  
   `docs/TSZ_Postman_Collection.json`
 
@@ -83,6 +85,8 @@ TSZ provides official client libraries for common stacks:
   ```bash
   pip install "tszclient-py @ git+https://github.com/thyrisAI/safe-zone.git@main"
   ```
+
+  If TSZ auth is enabled, pass `api_key` in `TSZConfig` (or set `TSZ_AUTH_TOKEN` in the demo).
 
   A runnable example lives under `examples/python-sdk-demo`.
 

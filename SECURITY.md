@@ -78,3 +78,50 @@ We respectfully ask that you:
 - Comply with applicable laws when testing and reporting vulnerabilities.
 
 Thank you for helping us keep TSZ and its users safe.
+
+---
+
+## Security Implementation Status
+
+TSZ is actively implementing a comprehensive security hardening roadmap to achieve production-ready status. For details, see:
+
+- **[docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md)** – Detailed 10-week plan for security enhancements (authentication, authorization, rate limiting, TLS, audit logging, vulnerability scanning)
+- **[ROADMAP.md](ROADMAP.md)** – Phase 1 Subsection 1b includes security milestones and timeline
+
+### Current Limitations (Being Addressed)
+
+The current version has the following security limitations that are being actively addressed as part of Phase 1:
+
+- Warning **Authentication is Optional by Configuration**: Authentication/RBAC middleware is implemented, but can be disabled (`AUTH_ENABLED=false`). Production deployments should enable it and configure scoped tokens.
+- Warning **Rate Limiting is Basic/In-Memory**: Global and endpoint-level limits are implemented, but distributed Redis-backed limiting is still pending.
+- Warning **HTTP-only**: No TLS by default (fix: week 4-5)
+- Warning **No Audit Logging**: Limited security event logging (fix: weeks 5-6)
+- Warning **Dependency Scanning**: Not automated in CI/CD (fix: week 6-7)
+
+Until these are implemented, TSZ should be deployed **only in secure, trusted environments** with the following precautions:
+
+1. **Network Isolation**: Deploy behind a VPC or private network with firewall rules
+2. **API Gateway**: Use an API gateway or reverse proxy (NGINX, Kong, AWS API Gateway) to:
+   - Enforce TLS/HTTPS
+   - Implement authentication (API keys, JWT)
+   - Implement rate limiting
+   - Add authorization and audit logging
+3. **Database Security**: Use encrypted connections (sslmode=require) to PostgreSQL
+4. **Redis Security**: Use TLS and strong authentication
+5. **Access Control**: Restrict network access to the TSZ service to only trusted clients
+6. **Monitoring**: Monitor logs for suspicious activity
+
+### Timeline to Production Ready
+
+See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for the complete timeline:
+
+- **Weeks 1-2**: HTTP security (headers, size limits, timeouts)
+- **Weeks 2-3**: Authentication & authorization
+- **Week 3-4**: Rate limiting
+- **Weeks 4-5**: TLS/HTTPS and encryption
+- **Weeks 5-6**: Audit logging and SIEM integration
+- **Weeks 6-7**: Automated vulnerability scanning
+- **Weeks 7-8**: Production hardening (Docker, secrets management, security tests)
+- **Week 8**: Documentation and contributing guidelines
+
+**Target**: Q2-Q3 2026

@@ -94,7 +94,7 @@ func TestDetect_ErrorHandling_Real(t *testing.T) {
 				t.Fatalf("Failed to marshal payload: %v", err)
 			}
 
-			resp, err := client.Post(baseURL+"/detect", "application/json", bytes.NewBuffer(jsonData))
+			resp, err := postJSONWithAuth(client, baseURL+"/detect", bytes.NewBuffer(jsonData))
 			if err != nil {
 				t.Fatalf("Request failed: %v", err)
 			}
@@ -209,6 +209,7 @@ func TestGateway_ErrorHandling(t *testing.T) {
 			for key, value := range tt.headers {
 				req.Header.Set(key, value)
 			}
+			applyTestAuthHeaders(req)
 
 			client := &http.Client{}
 			resp, err := client.Do(req)
@@ -249,7 +250,7 @@ func TestPatterns_CRUD_ErrorHandling(t *testing.T) {
 		}
 
 		jsonData, _ := json.Marshal(payload)
-		resp, err := http.Post(baseURL+"/patterns", "application/json", bytes.NewBuffer(jsonData))
+		resp, err := postJSONWithAuth(http.DefaultClient, baseURL+"/patterns", bytes.NewBuffer(jsonData))
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
 		}
@@ -264,6 +265,7 @@ func TestPatterns_CRUD_ErrorHandling(t *testing.T) {
 	// Test deleting non-existent pattern
 	t.Run("Delete non-existent pattern", func(t *testing.T) {
 		req, _ := http.NewRequest("DELETE", baseURL+"/patterns/99999", nil)
+		applyTestAuthHeaders(req)
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -290,7 +292,7 @@ func TestValidators_CRUD_ErrorHandling(t *testing.T) {
 		}
 
 		jsonData, _ := json.Marshal(payload)
-		resp, err := http.Post(baseURL+"/validators", "application/json", bytes.NewBuffer(jsonData))
+		resp, err := postJSONWithAuth(http.DefaultClient, baseURL+"/validators", bytes.NewBuffer(jsonData))
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
 		}
@@ -305,6 +307,7 @@ func TestValidators_CRUD_ErrorHandling(t *testing.T) {
 	// Test deleting non-existent validator
 	t.Run("Delete non-existent validator", func(t *testing.T) {
 		req, _ := http.NewRequest("DELETE", baseURL+"/validators/99999", nil)
+		applyTestAuthHeaders(req)
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -335,7 +338,7 @@ func TestConcurrentRequests(t *testing.T) {
 				}
 
 				jsonData, _ := json.Marshal(payload)
-				resp, err := http.Post(baseURL+"/detect", "application/json", bytes.NewBuffer(jsonData))
+				resp, err := postJSONWithAuth(http.DefaultClient, baseURL+"/detect", bytes.NewBuffer(jsonData))
 				if err != nil {
 					results <- err
 					return

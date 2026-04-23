@@ -13,11 +13,11 @@ This is not a toy demo — it mirrors how TSZ is deployed in real production sec
 **End-to-end LLM safety flow:**
 
 Attacker Prompt
-↓
+v
 /detect (TSZ guardrails enforced)
-↓
+v
 Decision: ALLOWED or BLOCKED
-↓
+v
 LLM execution (only if allowed)
 
 
@@ -161,7 +161,7 @@ go run main.go
 [BLOCK_SOURCE] DETECTION
 [REASONS] [EMAIL CREDIT_CARD]
 [CONFIDENCE] 0.84
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```
 
 ### Policy-Based Block
@@ -171,7 +171,7 @@ go run main.go
 [BLOCK_SOURCE] POLICY_VALIDATOR
 [REASONS] [DATA_EXFILTRATION_POLICY]
 [CONFIDENCE] 1.00
-[LLM] ❌ Not executed (blocked by TSZ)
+[LLM] No Not executed (blocked by TSZ)
 ```
 
 ## Why This Matters

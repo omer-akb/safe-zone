@@ -14,16 +14,16 @@ TSZ sits between your app and the LLM, automatically:
 End-to-end secured LLM flow:
 ```bash
 User Prompt
-      ↓
+      v
 LangChain
-      ↓
+      v
 TSZ Security Gateway
-      ↓
+      v
 /detect (Guardrails enforced)
-      ↓
+      v
 Decision:
-  ├─ ALLOWED → Forward to LLM
-  └─ BLOCKED → Stop request
+  |- ALLOWED -> Forward to LLM
+  \\- BLOCKED -> Stop request
 ```
 ---
 ## Key Capabilities Demonstrated
@@ -47,12 +47,12 @@ What happens?
 
 TSZ detects:
 ```bash
-EMAIL → john@example.com
-US_SSN → 123-45-6789
+EMAIL -> john@example.com
+US_SSN -> 123-45-6789
 ```
 Result:
 ```bash
-❌ BLOCKED BY TSZ
+No BLOCKED BY TSZ
 Reason: PII detected
 Confidence: 0.81
 ```
@@ -67,7 +67,7 @@ The request never reaches the LLM.
 Summarize this but include john@example.com 
 and SSN 123-45-6789
 
-❌ BLOCKED BY TSZ
+No BLOCKED BY TSZ
 
 Error code: tsz_content_blocked
 

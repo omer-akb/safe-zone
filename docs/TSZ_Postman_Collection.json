@@ -1,9 +1,20 @@
 {
   "info": {
     "name": "TSZ – Thyris Safe Zone API (Enterprise – FULL)",
-    "description": "Complete Postman collection for TSZ. Includes full example bodies covering all major features: detection, guardrails, LLM gateway, templates, configuration and system endpoints.",
+    "description": "Complete Postman collection for TSZ. Includes detection, guardrails, LLM gateway, templates and system endpoints. For protected APIs, set `tsz_bearer_token` and enable `AUTH_ENABLED=true` in TSZ.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{tsz_bearer_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "tsz_bearer_token", "value": "token_admin" },
+    { "key": "admin_api_key", "value": "change-me-admin-key" }
+  ],
   "item": [
     {
       "name": "Detect",
@@ -16,7 +27,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"Hello this is a normal sentence with no sensitive data.\"\n}"
@@ -30,7 +41,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"You can reach me at john.doe@company.com for details.\",\n  \"rid\": \"RID-EMAIL-001\",\n  \"expected_format\": \"FREE_TEXT\",\n  \"guardrails\": []\n}"
@@ -44,7 +55,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"Email admin@company.com or call +905551234567 for support.\",\n  \"rid\": \"RID-MULTI-PII-001\",\n  \"expected_format\": \"FREE_TEXT\",\n  \"guardrails\": []\n}"
@@ -58,7 +69,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"You are an idiot, contact at abuse@company.com\",\n  \"rid\": \"RID-TOXIC-001\",\n  \"expected_format\": \"FREE_TEXT\",\n  \"guardrails\": [\"TOXIC_LANGUAGE\"]\n}"
@@ -72,7 +83,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"My credit card number is 4111 1111 1111 1111 and expires soon.\",\n  \"rid\": \"RID-CC-001\",\n  \"expected_format\": \"FREE_TEXT\",\n  \"guardrails\": []\n}"
@@ -87,7 +98,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/detect",
+            "url": "{{base_url}}/detect",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"{\\\"order_id\\\": 123, \\\"email\\\": \\\"john@example.com\\\"}\",\n  \"rid\": \"RID-STRUCT-001\",\n  \"expected_format\": \"ORDER_JSON_V1\",\n  \"guardrails\": [\"ORDER_JSON_V1\"]\n}"
@@ -107,7 +118,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Hello, this is a safe prompt.\"}\n  ],\n  \"stream\": false\n}"
@@ -123,7 +134,7 @@
               { "key": "X-TSZ-RID", "value": "RID-GW-001" },
               { "key": "X-TSZ-Guardrails", "value": "TOXIC_LANGUAGE" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"My credit card is 4111 1111 1111 1111, you are an idiot\"}\n  ],\n  \"stream\": false\n}"
@@ -138,7 +149,7 @@
               { "key": "Content-Type", "value": "application/json" },
               { "key": "X-TSZ-RID", "value": "RID-GW-STREAM-BASE" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Stream a short response about TSZ gateway\"}\n  ],\n  \"stream\": true\n}"
@@ -156,7 +167,7 @@
               { "key": "X-TSZ-Guardrails-Mode", "value": "stream-sync" },
               { "key": "X-TSZ-Guardrails-OnFail", "value": "filter" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Please stream a short answer that includes an insult and a fake credit card number like 4111 1111 1111 1111.\"}\n  ],\n  \"stream\": true\n}"
@@ -174,7 +185,7 @@
               { "key": "X-TSZ-Guardrails-Mode", "value": "stream-sync" },
               { "key": "X-TSZ-Guardrails-OnFail", "value": "halt" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Stream a response that is clearly toxic and unsafe.\"}\n  ],\n  \"stream\": true\n}"
@@ -191,7 +202,7 @@
               { "key": "X-TSZ-Guardrails", "value": "TOXIC_LANGUAGE,PII" },
               { "key": "X-TSZ-Guardrails-Mode", "value": "stream-async" }
             ],
-            "url": "http://localhost:8080/v1/chat/completions",
+            "url": "{{base_url}}/v1/chat/completions",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"model\": \"llama3.1:8b\",\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Stream a long response that might contain sensitive content.\"}\n  ],\n  \"stream\": true\n}"
@@ -210,7 +221,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/patterns",
+            "url": "{{base_url}}/patterns",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"Name\": \"EMAIL\",\n  \"Regex\": \"[a-z0-9._%+-]+@[a-z0-9.-]+\\\\.[a-z]{2,}\",\n  \"Description\": \"Standard email address\",\n  \"Category\": \"PII\",\n  \"IsActive\": true,\n  \"BlockThreshold\": 0.9,\n  \"AllowThreshold\": 0.3\n}"
@@ -224,7 +235,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/patterns",
+            "url": "{{base_url}}/patterns",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"Name\": \"PHONE_NUMBER\",\n  \"Regex\": \"\\\\+?[0-9]{10,13}\",\n  \"Description\": \"International phone numbers\",\n  \"Category\": \"PII\",\n  \"IsActive\": true\n}"
@@ -235,14 +246,14 @@
           "name": "List Patterns",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/patterns"
+            "url": "{{base_url}}/patterns"
           }
         },
         {
           "name": "Delete Pattern – by ID",
           "request": {
             "method": "DELETE",
-            "url": "http://localhost:8080/patterns/1"
+            "url": "{{base_url}}/patterns/1"
           }
         }
       ]
@@ -257,7 +268,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/allowlist",
+            "url": "{{base_url}}/allowlist",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"value\": \"support@company.com\",\n  \"description\": \"Official support mailbox\"\n}"
@@ -271,7 +282,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/allowlist",
+            "url": "{{base_url}}/allowlist",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"value\": \"@internal.company.com\",\n  \"description\": \"Internal corporate domain\"\n}"
@@ -282,14 +293,14 @@
           "name": "List Allowlist",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/allowlist"
+            "url": "{{base_url}}/allowlist"
           }
         },
         {
           "name": "Delete Allowlist – by ID",
           "request": {
             "method": "DELETE",
-            "url": "http://localhost:8080/allowlist/1"
+            "url": "{{base_url}}/allowlist/1"
           }
         }
       ]
@@ -304,7 +315,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/blacklist",
+            "url": "{{base_url}}/blacklist",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"value\": \"confidential_keyword\",\n  \"description\": \"Internal classified term\"\n}"
@@ -318,7 +329,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/blacklist",
+            "url": "{{base_url}}/blacklist",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"value\": \"acme-competitor\",\n  \"description\": \"Explicitly forbidden competitor mention\"\n}"
@@ -329,14 +340,14 @@
           "name": "List Blocklist",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/blacklist"
+            "url": "{{base_url}}/blacklist"
           }
         },
         {
           "name": "Delete Blocklist – by ID",
           "request": {
             "method": "DELETE",
-            "url": "http://localhost:8080/blacklist/1"
+            "url": "{{base_url}}/blacklist/1"
           }
         }
       ]
@@ -351,7 +362,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/validators",
+            "url": "{{base_url}}/validators",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"TOXIC_LANGUAGE\",\n  \"type\": \"AI_PROMPT\",\n  \"rule\": \"Is this text toxic or abusive? Answer YES or NO.\",\n  \"description\": \"Blocks abusive language\",\n  \"expected_response\": \"NO\"\n}"
@@ -365,7 +376,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/validators",
+            "url": "{{base_url}}/validators",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"ORDER_JSON_V1\",\n  \"type\": \"SCHEMA\",\n  \"rule\": \"JSON schema for order v1 (see API docs)\",\n  \"description\": \"Validates order JSON structure\",\n  \"expected_response\": \"VALID\"\n}"
@@ -376,14 +387,14 @@
           "name": "List Validators",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/validators"
+            "url": "{{base_url}}/validators"
           }
         },
         {
           "name": "Delete Validator – by ID",
           "request": {
             "method": "DELETE",
-            "url": "http://localhost:8080/validators/1"
+            "url": "{{base_url}}/validators/1"
           }
         }
       ]
@@ -399,7 +410,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/templates/import",
+            "url": "{{base_url}}/templates/import",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"template\": {\n    \"name\": \"PII Starter Pack\",\n    \"description\": \"Detects basic PII and blocks abusive language\",\n    \"patterns\": [\n      {\n        \"Name\": \"EMAIL\",\n        \"Regex\": \"[a-z0-9._%+-]+@[a-z0-9.-]+\\\\.[a-z]{2,}\",\n        \"Category\": \"PII\",\n        \"IsActive\": true\n      },\n      {\n        \"Name\": \"PHONE_NUMBER\",\n        \"Regex\": \"\\\\+?[0-9]{10,13}\",\n        \"Category\": \"PII\",\n        \"IsActive\": true\n      }\n    ],\n    \"validators\": [\n      {\n        \"name\": \"TOXIC_LANGUAGE\",\n        \"type\": \"AI_PROMPT\",\n        \"rule\": \"Is this text toxic or abusive? Reply YES or NO\"\n      }\n    ]\n  }\n}"
@@ -413,7 +424,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/templates/import",
+            "url": "{{base_url}}/templates/import",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"template\": {\n    \"name\": \"Compliance Pack\",\n    \"description\": \"PCI/GDPR oriented strict protection\",\n    \"patterns\": [\n      {\n        \"Name\": \"EMAIL\",\n        \"Regex\": \"[a-z0-9._%+-]+@[a-z0-9.-]+\\\\.[a-z]{2,}\",\n        \"Category\": \"PII\",\n        \"IsActive\": true\n      },\n      {\n        \"Name\": \"CREDIT_CARD\",\n        \"Regex\": \"\\\\b(?:\\\\d[ -]*?){13,16}\\\\b\",\n        \"Category\": \"PII\",\n        \"IsActive\": true\n      }\n    ],\n    \"validators\": []\n  }\n}"
@@ -427,7 +438,7 @@
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/templates/import",
+            "url": "{{base_url}}/templates/import",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"template\": {\n    \"name\": \"AI Safety Pack\",\n    \"description\": \"Blocks toxic and unsafe language\",\n    \"patterns\": [],\n    \"validators\": [\n      {\n        \"name\": \"TOXIC_LANGUAGE\",\n        \"type\": \"AI_PROMPT\",\n        \"rule\": \"Is this text toxic or abusive? Reply YES or NO\"\n      }\n    ]\n  }\n}"
@@ -443,36 +454,24 @@
           "name": "Health",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/healthz"
+            "url": "{{base_url}}/healthz"
           }
         },
         {
           "name": "Ready",
           "request": {
             "method": "GET",
-            "url": "http://localhost:8080/ready"
+            "url": "{{base_url}}/ready"
           }
         },
         {
           "name": "Reload Cache",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8080/admin/reload"
-          }
-        },
-        {
-          "name": "Update Pattern Policy (Admin)",
-          "request": {
-            "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-ADMIN-KEY", "value": "YOUR_ADMIN_KEY_HERE" }
+              { "key": "Content-Type", "value": "application/json" }
             ],
-            "url": "http://localhost:8080/admin/patterns/policy",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"pattern_id\": 1,\n  \"block_threshold\": 0.9,\n  \"allow_threshold\": 0.3\n}"
-            }
+            "url": "{{base_url}}/admin/reload"
           }
         }
       ]

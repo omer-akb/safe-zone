@@ -59,19 +59,19 @@ type ChatProvider interface {
 
 ```
 Client Request (OpenAI format)
-    ↓
+    v
 TSZ Gateway
-    ↓
+    v
 Provider Abstraction Layer
-    ↓
+    v
 Provider-Specific Implementation
-    ↓
+    v
 Upstream AI Service (OpenAI, Bedrock, etc.)
-    ↓
+    v
 Provider-Specific Response
-    ↓
+    v
 OpenAI-Compatible Response
-    ↓
+    v
 Client
 ```
 
@@ -150,11 +150,11 @@ AI_MODEL=llama3.1:8b
 
 #### Features
 
-- ✅ Non-streaming requests
-- ✅ Streaming requests (SSE)
-- ✅ Custom headers
-- ✅ Timeout configuration
-- ✅ Automatic retries (via HTTP client)
+- Yes Non-streaming requests
+- Yes Streaming requests (SSE)
+- Yes Custom headers
+- Yes Timeout configuration
+- Yes Automatic retries (via HTTP client)
 
 #### Limitations
 
@@ -215,7 +215,7 @@ TSZ needs IAM permissions to invoke Bedrock models. You can configure this in se
 ##### Option 1: IAM User with Access Keys (Development/Testing)
 
 1. **Create IAM Policy** in AWS Console:
-   - Go to IAM → Policies → Create Policy
+   - Go to IAM -> Policies -> Create Policy
    - Select JSON tab and paste:
 
 ```json
@@ -244,12 +244,12 @@ TSZ needs IAM permissions to invoke Bedrock models. You can configure this in se
 2. **Name the policy**: `TSZ-Bedrock-Access`
 
 3. **Create IAM User**:
-   - Go to IAM → Users → Create User
+   - Go to IAM -> Users -> Create User
    - Name: `tsz-bedrock-user`
    - Attach the policy: `TSZ-Bedrock-Access`
 
 4. **Create Access Keys**:
-   - Select the user → Security Credentials → Create Access Key
+   - Select the user -> Security Credentials -> Create Access Key
    - Choose "Application running outside AWS"
    - Save the Access Key ID and Secret Access Key
 
@@ -267,7 +267,7 @@ TSZ needs IAM permissions to invoke Bedrock models. You can configure this in se
 For production deployments on AWS (EC2, ECS, EKS, Lambda):
 
 1. **Create IAM Role**:
-   - Go to IAM → Roles → Create Role
+   - Go to IAM -> Roles -> Create Role
    - Select trusted entity: EC2, ECS Task, or EKS
    - Attach the policy: `TSZ-Bedrock-Access`
    - Name: `TSZ-Bedrock-Role`
@@ -337,13 +337,13 @@ For the latest model IDs and availability, refer to the [AWS Bedrock Model IDs d
 
 #### Features
 
-- ✅ Non-streaming requests
-- ✅ Multiple model families
-- ✅ AWS IAM authentication
-- ✅ VPC endpoint support
-- ✅ AWS KMS encryption
-- ✅ CloudTrail audit logging
-- ⏳ Streaming requests (planned for future release)
+- Yes Non-streaming requests
+- Yes Multiple model families
+- Yes AWS IAM authentication
+- Yes VPC endpoint support
+- Yes AWS KMS encryption
+- Yes CloudTrail audit logging
+- Planned Streaming requests (planned for future release)
 
 #### Limitations
 
@@ -415,10 +415,10 @@ If configuration is invalid, TSZ will:
 
 | Feature | OpenAI-Compatible | AWS Bedrock |
 |---------|-------------------|-------------|
-| Non-streaming | ✅ | ✅ |
-| Streaming | ✅ | ⏳ Planned |
-| Multiple models | ✅ | ✅ |
-| Custom endpoints | ✅ | ✅ (VPC) |
+| Non-streaming | Yes | Yes |
+| Streaming | Yes | Planned Planned |
+| Multiple models | Yes | Yes |
+| Custom endpoints | Yes | Yes (VPC) |
 | Authentication | Bearer token | AWS IAM |
 | Encryption | TLS | TLS + KMS |
 | Audit logging | Application logs | CloudTrail |

@@ -15,7 +15,9 @@ type Attack struct {
 }
 
 func main() {
-	fmt.Println("\n=== TSZ Data Exfiltration Red-Team Demo (Go) ===\n")
+	fmt.Println()
+	fmt.Println("=== TSZ Data Exfiltration Red-Team Demo (Go) ===")
+	fmt.Println()
 
 	// Create TSZ client
 	client, err := tsz.New(tsz.Config{

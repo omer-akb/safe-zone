@@ -54,13 +54,13 @@ example that:
 ```go
 type Config struct {
     BaseURL    string
-    APIKey     string // Optional Admin API Key (for management operations)
+    APIKey     string // Optional auth token (sent as Bearer + X-ADMIN-KEY for compatibility)
     HTTPClient *http.Client
 }
 
 client, err := tszclient.New(tszclient.Config{
     BaseURL: "http://localhost:8080",
-    APIKey:  "your-admin-key", // Required only for pattern/allowlist management
+    APIKey:  "token_admin", // Use when TSZ auth is enabled
 })
 if err != nil {
     log.Fatalf("failed to create tsz client: %v", err)
@@ -68,6 +68,9 @@ if err != nil {
 ```
 
 - `BaseURL` should point to your TSZ instance (gateway or direct).
+- `APIKey` is optional. If set, the client sends:
+  - `Authorization: Bearer <APIKey>`
+  - `X-ADMIN-KEY: <APIKey>` (legacy compatibility)
 - `HTTPClient` is optional; if nil, a default client with 60 second timeout is used.
 
 ---

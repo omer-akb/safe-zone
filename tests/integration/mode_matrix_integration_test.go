@@ -21,7 +21,7 @@ func TestDetect_BehaviorUnderDifferentPIIModes(t *testing.T) {
 			// In CI the server runs with PII_MODE=MASK; to fully validate BLOCK mode behavior,
 			// a dedicated job/environment with PII_MODE=BLOCK should be configured.
 
-			resp, err := http.Post(url, "application/json", strings.NewReader(body))
+			resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 			if err != nil {
 				t.Fatalf("POST /detect failed: %v", err)
 			}
@@ -70,6 +70,7 @@ func TestGateway_BehaviorUnderDifferentBlockModes(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-TSZ-RID", "GW-BLOCKMODE-"+bm)
 			req.Header.Set("X-TSZ-Guardrails", "TOXIC_LANGUAGE")
+			applyTestAuthHeaders(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

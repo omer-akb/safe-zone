@@ -61,7 +61,7 @@ func TestDetect_Golden_EmailAndSSN(t *testing.T) {
 	url := baseURL() + "/detect"
 	body := `{"text": "` + strings.ReplaceAll(input.Text, "\"", "\\\"") + `", "rid": "` + name + `"}`
 
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	resp, err := postJSONWithAuth(http.DefaultClient, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /detect failed: %v", err)
 	}

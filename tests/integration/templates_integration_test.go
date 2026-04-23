@@ -41,7 +41,7 @@ func TestTemplates_ImportAndDetectFlow(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(templatePayload)
-	resp, err := http.Post(templateBaseURL()+"/templates/import", "application/json", bytes.NewReader(body))
+	resp, err := postJSONWithAuth(http.DefaultClient, templateBaseURL()+"/templates/import", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /templates/import failed: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestTemplates_ImportAndDetectFlow(t *testing.T) {
 
 	// 2) Call /detect with text that should match the new pattern
 	detectBody := `{"text": "Order CODE-1234 should be processed", "rid": "tmpl-it-1"}`
-	resp2, err := http.Post(templateBaseURL()+"/detect", "application/json", bytes.NewReader([]byte(detectBody)))
+	resp2, err := postJSONWithAuth(http.DefaultClient, templateBaseURL()+"/detect", bytes.NewReader([]byte(detectBody)))
 	if err != nil {
 		t.Fatalf("POST /detect failed: %v", err)
 	}

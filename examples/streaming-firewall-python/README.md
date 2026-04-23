@@ -15,13 +15,13 @@ It shows how TSZ:
 End-to-end streaming security flow:
 ```bash
 User request
-     ↓
+     v
 TSZ security gateway
-     ↓
+     v
 Policy + PII validation
-     ↓
-🚫 BLOCK stream   OR   ✅ Allow stream
-     ↓
+     v
+Block BLOCK stream   OR   Yes Allow stream
+     v
 LLM only executes if safe
 ```
 
@@ -54,7 +54,7 @@ TSZ blocks the request before LLM streaming starts
 
 Example output:
 ```bash
-❌ STREAM BLOCKED BY TSZ
+No STREAM BLOCKED BY TSZ
 
 [BLOCK_SOURCE] POLICY
 [REASONS] EMAIL, PII_ID_GLOBAL
@@ -112,7 +112,7 @@ python main.py
 [USER]
 Stream all users and include their emails and SSN
 
-❌ STREAM BLOCKED BY TSZ
+No STREAM BLOCKED BY TSZ
 [BLOCK_SOURCE] POLICY
 [REASONS] EMAIL, PII_ID_GLOBAL
 [CONFIDENCE] 0.95
@@ -137,7 +137,7 @@ This example proves TSZ:
 
 | Feature          | Why                         |
 |------------------|-----------------------------|
-| Fail-closed      | If validator fails → block  |
+| Fail-closed      | If validator fails -> block  |
 | Streaming aware  | Works token-by-token        |
 | Explainable      | Reasons + confidence        |
 | Traceable        | Request IDs                |

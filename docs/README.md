@@ -33,6 +33,9 @@ The documentation set is organized as follows:
 - **Architecture & Security Overview** – Technical architecture, data flows and security controls  
   `ARCHITECTURE_SECURITY.md`
 
+- **Security Roadmap** – Detailed hardening milestones and implementation status  
+  `SECURITY_ROADMAP.md`
+
 - **Postman Collection** – Ready‑to‑use collection for exploring the API  
   `TSZ_Postman_Collection.json`
 

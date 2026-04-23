@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
+	"thyris-sz/internal/auth"
 	"thyris-sz/internal/cache"
 	"thyris-sz/internal/models"
 	"thyris-sz/internal/repository"
@@ -16,9 +18,7 @@ func ReloadCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admin auth via API key (consistent with UpdatePatternPolicy)
-	adminKey := os.Getenv("ADMIN_API_KEY")
-	if adminKey == "" || r.Header.Get("X-ADMIN-KEY") != adminKey {
+	if !isAdminAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -41,9 +41,7 @@ func UpdatePatternPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simple admin auth via API key
-	adminKey := os.Getenv("ADMIN_API_KEY")
-	if adminKey == "" || r.Header.Get("X-ADMIN-KEY") != adminKey {
+	if !isAdminAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -89,4 +87,15 @@ func UpdatePatternPolicy(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func isAdminAuthorized(r *http.Request) bool {
+	if auth.HasPermission(r, "cache:admin") || auth.HasPermission(r, "*") {
+		return true
+	}
+	adminKey := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+	if adminKey == "" {
+		return false
+	}
+	return strings.TrimSpace(r.Header.Get("X-ADMIN-KEY")) == adminKey
 }

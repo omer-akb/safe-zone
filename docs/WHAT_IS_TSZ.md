@@ -46,8 +46,8 @@ Each detection receives a **confidence score** and an **explanation** describing
 
 Before data leaves your environment, TSZ can **redact** sensitive values using placeholders, while preserving context for downstream systems (especially LLMs):
 
-- `john.doe@company.com` → `[EMAIL]`
-- `4111 1111 1111 1111` → `[CREDIT_CARD]`
+- `john.doe@company.com` -> `[EMAIL]`
+- `4111 1111 1111 1111` -> `[CREDIT_CARD]`
 
 This allows you to:
 
@@ -92,6 +92,17 @@ Templates make it easy to:
 - Share policies across teams and environments
 - Bootstrap a new deployment within minutes
 
+### 2.6 Runtime Security Controls
+
+TSZ now includes runtime HTTP security controls for production hardening:
+
+- Authentication and RBAC middleware for non-public endpoints
+- Request size limits and endpoint timeouts
+- Security response headers and fail-secure CORS policy
+- Global and endpoint-level rate limiting
+
+These controls are configurable via environment variables and should be enabled with least-privilege settings in production.
+
 ---
 
 ## 3. How TSZ Fits in Your Architecture
@@ -111,8 +122,8 @@ TSZ is typically deployed as a **microservice** inside your VPC or private netwo
 
 Your application then decides how to proceed:
 
-- If `blocked = true` → reject the operation or ask the user to revise content.
-- If `blocked = false` → use `redacted_text` to call an LLM or external API.
+- If `blocked = true` -> reject the operation or ask the user to revise content.
+- If `blocked = false` -> use `redacted_text` to call an LLM or external API.
 
 ---
 

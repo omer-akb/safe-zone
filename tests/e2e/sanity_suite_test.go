@@ -18,7 +18,7 @@ func baseURL() string {
 func getClient(t *testing.T) *tszclient.Client {
 	client, err := tszclient.New(tszclient.Config{
 		BaseURL: baseURL(),
-		APIKey:  "test-admin-key",
+		APIKey:  testAdminKey(),
 	})
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
