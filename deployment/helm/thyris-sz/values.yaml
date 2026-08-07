@@ -1,0 +1,147 @@
+replicaCount: 1
+
+image:
+  repository: thyris-sz
+  pullPolicy: IfNotPresent
+  tag: local
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: thyris-sz.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+config:
+  serverPort: "8080"
+  piiMode: MASK
+  appMode: DEV
+  gatewayBlockMode: BLOCK
+  aiProvider: OPENAI_COMPATIBLE
+  aiModelUrl: http://host.docker.internal:11434/v1
+  aiModel: llama3.1:8b
+  featureAiSemanticAnalysis: "true"
+  featureJsonSchemaValidation: "true"
+  streamMaxBufferBytes: "262144"
+  streamFailMode: LENIENT
+  securityHeadersEnabled: "true"
+  corsEnabled: "true"
+  corsAllowedOrigins: ""
+  corsAllowedMethods: GET,POST,OPTIONS
+  corsAllowedHeaders: Content-Type,Authorization
+  corsMaxAge: "300"
+  maxRequestSizeBytes: "10485760"
+  handlerTimeoutDetectSeconds: "30"
+  handlerTimeoutChatSeconds: "300"
+  httpReadTimeoutSeconds: "15"
+  httpWriteTimeoutSeconds: "15"
+  httpIdleTimeoutSeconds: "60"
+  httpMaxHeaderBytes: "1048576"
+  validateContentType: "true"
+  authEnabled: "false"
+  authRequireBearerToken: "true"
+  authPublicPaths: /healthz,/ready
+  authTokenPermissions: token_detect=detect:read,token_gateway=gateway:use,token_admin=*
+  rateLimitEnabled: "true"
+  rateLimitRequestsPerSecond: "100"
+  rateLimitBurst: "1000"
+  rateLimitDetectPerMinute: "1000"
+  rateLimitChatPerMinute: "100"
+  rateLimitPatternsPerMinute: "50"
+  rateLimitAdminPerMinute: "10"
+  confidenceAllowThreshold: "0.30"
+  confidenceBlockThreshold: "0.85"
+  awsBedrockRegion: ""
+  awsBedrockEndpointOverride: ""
+  awsBedrockModelId: anthropic.claude-3-sonnet-20240229-v1:0
+
+secrets:
+  create: true
+  existingSecret: ""
+  aiApiKey: ollama
+  adminApiKey: change-me-in-production
+  dbDsn: ""
+  redisUrl: ""
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 15-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    username: postgres
+    password: postgres
+    database: thyris
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: ""
+  resources: {}
+
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    password: thyrisredis
+  service:
+    port: 6379
+  persistence:
+    enabled: false
+    size: 2Gi
+    storageClass: ""
+  resources: {}

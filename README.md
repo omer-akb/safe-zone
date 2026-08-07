@@ -31,6 +31,8 @@ For all user and customer‑facing documentation, see the `docs/` directory:
   `docs/PRODUCT_OVERVIEW.md`
 - **Quick Start Guide** – Run TSZ locally and call `/detect`  
   `docs/QUICK_START.md`
+- **Deployment Guide** – Deploy TSZ to Kubernetes with Helm  
+  `docs/DEPLOYMENT.md`
 - **API Reference (Enterprise)** – Full REST API documentation  
   `docs/API_REFERENCE.md`
 - **Architecture & Security Overview** – Architecture, data flows, security controls  
@@ -45,7 +47,8 @@ If you are evaluating TSZ for the first time, we recommend the following order:
 1. `docs/WHAT_IS_TSZ.md`
 2. `docs/PRODUCT_OVERVIEW.md`
 3. `docs/QUICK_START.md`
-4. `docs/API_REFERENCE.md`
+4. `docs/DEPLOYMENT.md`
+5. `docs/API_REFERENCE.md`
 
 For a more detailed map of the documentation set, see `docs/README.md`.
 

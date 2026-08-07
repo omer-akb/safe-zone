@@ -4,6 +4,9 @@ This guide helps you **deploy TSZ locally** and call the primary `/detect` endpo
 
 TSZ is designed to run as a containerized microservice in your environment (Docker, Kubernetes, on‑prem, cloud). The steps below focus on a local Docker‑based setup.
 
+For Kubernetes deployments, use the Helm chart in `deployment/helm/thyris-sz`
+and follow `docs/DEPLOYMENT.md`.
+
 ---
 
 ## 1. Prerequisites
@@ -11,6 +14,7 @@ TSZ is designed to run as a containerized microservice in your environment (Dock
 - **Docker** and **Docker Compose** installed
 - **Git** installed
 - Optional: **Go 1.23+** if you want to run from source instead of Docker
+- Optional: **Helm 3** and access to a Kubernetes cluster if you want to use the Helm chart
 
 ---
 
@@ -90,6 +94,19 @@ This will start:
 - **TSZ API server** on `http://localhost:8080`
 - **PostgreSQL** (for patterns, allowlist/blocklist, validators)
 - **Redis** (for AI confidence caching and fast lookups)
+
+For Kubernetes instead of Docker Compose:
+
+```bash
+helm upgrade --install thyris-sz deployment/helm/thyris-sz \
+  --namespace thyris-sz \
+  --create-namespace \
+  --set image.repository=ghcr.io/thyrisai/thyris-sz \
+  --set image.tag=0.1.0
+```
+
+See `docs/DEPLOYMENT.md` for production-style values, external PostgreSQL and
+Redis configuration, ingress, and secret handling.
 
 You can check container status with:
 

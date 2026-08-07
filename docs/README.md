@@ -24,6 +24,9 @@ The documentation set is organized as follows:
 - **Quick Start Guide** – Install, configure and call TSZ in under 10 minutes  
   `QUICK_START.md`
 
+- **Deployment Guide** – Deploy TSZ to Kubernetes with Helm  
+  `DEPLOYMENT.md`
+
 - **AI Provider Guide** – Comprehensive guide for configuring OpenAI-compatible and AWS Bedrock providers  
   `PROVIDERS.md`
 
@@ -56,10 +59,11 @@ For repository‑level information (license, contributing, security policy), see
 ## Getting Started
 
 1. **Read:** `WHAT_IS_TSZ.md` for a conceptual understanding.
-2. **Deploy:** Follow `QUICK_START.md` to run TSZ locally using Docker.
-3. **Configure:** Review `PROVIDERS.md` to choose and configure your AI provider (OpenAI, Bedrock, Ollama, etc.).
-4. **Explore:** Import `TSZ_Postman_Collection.json` into Postman and call the `/detect` endpoint.
-5. **Integrate:** Use `API_REFERENCE.md` to wire TSZ into your applications and LLM/AI stack.
+2. **Deploy locally:** Follow `QUICK_START.md` to run TSZ using Docker.
+3. **Deploy on Kubernetes:** Use `DEPLOYMENT.md` for the Helm chart.
+4. **Configure:** Review `PROVIDERS.md` to choose and configure your AI provider (OpenAI, Bedrock, Ollama, etc.).
+5. **Explore:** Import `TSZ_Postman_Collection.json` into Postman and call the `/detect` endpoint.
+6. **Integrate:** Use `API_REFERENCE.md` to wire TSZ into your applications and LLM/AI stack.
 
 ---
 
@@ -75,8 +79,9 @@ If you are evaluating TSZ in a POC, we recommend starting with:
 1. `WHAT_IS_TSZ.md`
 2. `ARCHITECTURE_SECURITY.md`
 3. `QUICK_START.md`
-4. `PROVIDERS.md` (if using AWS Bedrock or custom AI providers)
-5. `API_REFERENCE.md`
+4. `DEPLOYMENT.md` (if deploying to Kubernetes)
+5. `PROVIDERS.md` (if using AWS Bedrock or custom AI providers)
+6. `API_REFERENCE.md`
 
 ---
 
