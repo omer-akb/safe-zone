@@ -1,8 +1,16 @@
 # Adopters of Safe Zone
 
-Below are the adopters of the Safe Zone project. If you are using Safe Zone in your organization, please add your name to the list by submitting a pull request: this will help foster the Safe Zone community. Kindly ensure the list remains in alphabetical order.
+This file is the public reference list for organizations that have adopted
+Thyris Safe Zone (TSZ). To add or update an entry, follow the
+[adoption guide](docs/ADOPTION.md).
 
+Organizations covered by Section 10 of the [license](LICENSE) must complete
+the adoption process before qualifying production use. Other users are warmly
+invited to adopt voluntarily.
 
-| Organization                          | Contact (GitHub User Name)             | Environment                                | Description of Use                                                    |
-|---------------------------------------|----------------------------------------|--------------------------------------------|-----------------------------------------------------------------------|
-| [Thyris.AI](https://thyris.ai/) | [@halil-bugol](https://github.com/halil-bugol) | Production  | LLM Security Gateway, MCP Security Gateway |
+Entries must be authorized, accurate, and kept in alphabetical order. Inclusion
+is a factual statement of use and does not imply endorsement by either party.
+
+| Organization | Authorized contact | Environment | Public description of use | Public reference |
+|---|---|---|---|---|
+| [Thyris.AI](https://thyris.ai/) | [@halil-bugol](https://github.com/halil-bugol) | Production | LLM Security Gateway and MCP Security Gateway | [Safe Zone repository](https://github.com/thyrisAI/safe-zone) |

@@ -42,6 +42,9 @@ The documentation set is organized as follows:
 - **Postman Collection** – Ready‑to‑use collection for exploring the API  
   `TSZ_Postman_Collection.json`
 
+- **Adoption Guide** – How organizations become public TSZ adopters
+  `ADOPTION.md`
+
 - **Go Client (tszclient-go)** – Lightweight Go SDK for `/detect` and the LLM gateway  
   `../pkg/tszclient-go/README.md`
 
@@ -87,11 +90,15 @@ If you are evaluating TSZ in a POC, we recommend starting with:
 
 ## Open Source & Governance
 
-TSZ is released as open source under the **Apache License 2.0**.
+TSZ is released under the **TSZ Public Adoption License 1.0**, which
+incorporates Apache License 2.0 terms and adds a public-adoption condition for
+certain large commercial users.
 
 At the repository root you will find:
 
-- `LICENSE` – full license text (Apache 2.0)
+- `LICENSE` – full TSZ Public Adoption License 1.0 text
+- `ADOPTERS.md` – public adopter reference list
+- `docs/ADOPTION.md` – adoption instructions
 - `CONTRIBUTING.md` – how to set up a dev environment, run tests and contribute
 - `CODE_OF_CONDUCT.md` – community standards and expected behavior
 - `SECURITY.md` – vulnerability disclosure and security contact details

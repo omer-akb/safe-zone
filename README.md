@@ -166,6 +166,13 @@ We welcome community contributions.
 
 ## License
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for the full text.
+This project uses the **TSZ Public Adoption License 1.0**. It incorporates the
+Apache License 2.0 terms and adds a public-adoption condition for organizations
+with 500 or more employees that use TSZ with a commercial product. See the
+[LICENSE](LICENSE) for the controlling terms, the public [adopter list](ADOPTERS.md),
+and the [adoption guide](docs/ADOPTION.md).
 
-Unless otherwise noted, all contributions to this repository are also licensed under the Apache License 2.0.
+Because of the additional condition, this is not the standard Apache License
+2.0 and is not an OSI-approved open-source license. Unless otherwise noted, all
+contributions to this repository are licensed under the repository's main
+license.

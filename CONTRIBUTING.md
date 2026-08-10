@@ -194,4 +194,6 @@ Before opening a PR, ensure:
 
 ## License
 
-By contributing to this repository, you agree that your contributions will be licensed under the terms of the repository’s main license, which is [Apache License 2.0](LICENSE).
+By contributing to this repository, you agree that your contributions will be
+licensed under the terms of the repository's main license, the
+[TSZ Public Adoption License 1.0](LICENSE).
