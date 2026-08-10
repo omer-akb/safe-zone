@@ -25,7 +25,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 **Goal:** Ensure the gateway is robust, testable and production‑ready for security‑sensitive (e.g. banking/PCI) adopters.
 
-**Reference:** See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for detailed security hardening plan (10 weeks, Q2-Q3 2026).
+**Reference:** See [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) for the detailed security hardening plan, rebaselined to 17 August-25 October 2026 (10 weeks, Q3-Q4 2026).
 
 ### Subsection 1a: Functional Testing (Core Features)
 
@@ -66,9 +66,9 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 ### Subsection 1b: Security Hardening (HTTP, Auth, Rate Limiting, Encryption, Audit Logging)
 
-**Status:** See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for full details and timeline.
+**Status:** See [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) for full details and the rebaselined 17 August-25 October 2026 timeline.
 
-- [x] **Milestone 1: HTTP Security Hardening** (Weeks 1-2)
+- [x] **Milestone 1: HTTP Security Hardening** (17-30 August 2026; Weeks 1-2)
   - [x] Add request size limits (10 MB default, configurable)
   - [x] Enforce per-handler timeouts (/detect: 30s, /chat: 5m)
   - [x] Configure HTTP server with ReadTimeout, WriteTimeout, MaxHeaderBytes
@@ -76,7 +76,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [x] Add CORS middleware with configurable allowed origins
   - [x] Add input validation middleware (Content-Type, JSON body validation)
 
-- [ ] **Milestone 2: Authentication & Authorization** (Weeks 2-3)
+- [ ] **Milestone 2: Authentication & Authorization** (24 August-13 September 2026; Weeks 2-4)
   - [x] Create `internal/auth/auth.go` with Bearer token and API key validation
   - [ ] Add `api_keys` database table with hashed tokens
   - [x] Implement authentication middleware for all non-health endpoints
@@ -85,14 +85,14 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [x] Protect admin endpoints (`/admin/*`) with admin role requirement
   - [ ] Create API key management endpoints (create, list, revoke, rotate)
 
-- [ ] **Milestone 3: Rate Limiting & DDoS Protection** (Week 3-4)
+- [ ] **Milestone 3: Rate Limiting & DDoS Protection** (7-20 September 2026; Weeks 4-5)
   - [x] Implement global rate limiter in `internal/middleware/ratelimit.go`
   - [x] Configure per-endpoint rate limits (/detect: 1000 req/min, /chat: 100 req/min, /patterns: 50 req/min, /admin: 10 req/min)
   - [ ] Store rate limit state in Redis for distributed limiting
   - [x] Return 429 Too Many Requests on limit exceeded
   - [x] Implement IP-based and key-based rate limiting
 
-- [ ] **Milestone 4: Data Protection & Encryption** (Weeks 4-5)
+- [ ] **Milestone 4: Data Protection & Encryption** (14-27 September 2026; Weeks 5-6)
   - [ ] Make TLS/HTTPS mandatory (port 8443, TLS 1.3 minimum)
   - [ ] Implement HTTP -> HTTPS redirect on port 80
   - [ ] Configure database connections with SSL mode (sslmode=require)
@@ -101,7 +101,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [ ] Encrypt sensitive fields in database (optional: per-field encryption)
   - [ ] Remove all hardcoded credentials from code and configs
 
-- [ ] **Milestone 5: Audit Logging & Monitoring** (Weeks 5-6)
+- [ ] **Milestone 5: Audit Logging & Monitoring** (21 September-4 October 2026; Weeks 6-7)
   - [ ] Create `audit_logs` database table with fields for user, action, resource, IP, timestamp
   - [ ] Log authentication events (successful/failed login, suspicious patterns)
   - [ ] Log authorization events (permission granted/denied, unauthorized attempts)
@@ -110,7 +110,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [ ] Enhance SIEM integration to forward audit logs (new `internal/guardrails/siem.go` features)
   - [ ] Implement log retention and rotation policies
 
-- [ ] **Milestone 6: Vulnerability Management** (Week 6-7)
+- [ ] **Milestone 6: Vulnerability Management** (28 September-11 October 2026; Weeks 7-8)
   - [ ] Add GitHub Actions workflow for `govulncheck` (golang.org/x/vuln)
   - [ ] Add `gosec` (Go security analyzer) to CI/CD
   - [ ] Add OWASP dependency-check to CI/CD pipeline
@@ -118,7 +118,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [ ] Add Trivy for container image scanning
   - [ ] Define security SLA for vulnerability fixes (CRITICAL: 24h, HIGH: 7d, MEDIUM: 30d)
 
-- [ ] **Milestone 7: Production Hardening & Deployment** (Week 7-8)
+- [ ] **Milestone 7: Production Hardening & Deployment** (5-18 October 2026; Weeks 8-9)
   - [ ] Remove default credentials from `docker-compose.yml` and `init.sql`
   - [ ] Document recommended network topology (reverse proxy, TLS termination, private subnets)
   - [ ] Run containers as non-root user
@@ -126,12 +126,43 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [ ] Add security tests in `tests/security/` (auth bypass, authz bypass, injection resistance)
   - [ ] Implement automated secret rotation (90 days for API keys/DB passwords, 30 days for certs)
 
-- [ ] **Milestone 8: Documentation & Guidelines** (Week 8)
+- [ ] **Milestone 8: Documentation & Guidelines** (12-25 October 2026; Weeks 9-10)
   - [ ] Create `docs/SECURITY_OPERATIONS.md` (deployment, API key management, TLS setup, secrets management, monitoring)
   - [x] Update `docs/ARCHITECTURE_SECURITY.md` with auth, rate limiting, and audit logging details
   - [x] Add authentication examples to `docs/API_REFERENCE.md`
   - [ ] Create `docs/RUNBOOKS.md` with incident response procedures
   - [x] Update `CONTRIBUTING.md` with security checklist for PRs
+
+### Q3-Q4 2026 Gateway Security Release
+
+**Target:** 25 October 2026 (rebaselined in mid-August 2026). Deliver complete model-payload and tool-call inspection for the banking/hybrid deployment profile.
+
+- [ ] Replace role-specific input scanning with inspection of the exact serialized payload that will reach the model:
+  - [ ] Inspect text across `system`, `developer`, `user`, `assistant`, and tool-result messages according to content provenance and policy.
+  - [ ] Inspect supported structured and multimodal content parts; reject unsupported or unknown content types fail-closed.
+  - [ ] Apply schema and sensitive-data controls to retrieved context, attachments, auxiliary fields, and prior messages before forwarding.
+  - [ ] Add regression tests proving prohibited content cannot bypass inspection by changing role, nesting, content type, or payload field.
+- [ ] Add inline tool-call inspection before execution and tool-result inspection before model reuse:
+  - [ ] Parse and validate `tool_calls`, tool identity, and arguments instead of treating them as opaque model output.
+  - [ ] Enforce deny-by-default tool and MCP-server authorization using tenant/realm, agent, active flow, and policy scope.
+  - [ ] Validate arguments against the approved tool JSON Schema; reject unknown properties, type mismatches, oversized values, and sensitive fields.
+  - [ ] Run PII, secret, prompt-injection, and customer-policy inspection over tool arguments and returned content.
+  - [ ] Require explicit confirmation or an external business-policy decision for configured high-impact actions.
+  - [ ] Emit payload-minimized audit events for proposed, allowed, denied, failed, and completed tool calls.
+- [ ] Enforce hybrid local-guard routing for semantic validation and PII confidence refinement:
+  - [ ] Route any validation that can observe raw PII exclusively to a customer-controlled local guard model.
+  - [ ] Prevent raw PII from being sent to cloud/external validator endpoints in the hybrid profile.
+  - [ ] Make AI confidence refinement feature-gated, category-specific, and disabled by default for deterministic/high-certainty patterns.
+  - [ ] Run deterministic detection and redaction before any separately approved external semantic processing.
+  - [ ] Fail closed when the required local guard model is unavailable, misconfigured, or returns malformed output.
+  - [ ] Add egress tests proving raw PII cannot leave the customer boundary through validation, confidence, gateway, tool, log, cache, or error paths.
+- [ ] Harden customer-defined allowlists as governed policy objects:
+  - [ ] Scope entries by customer/tenant, realm, environment, policy, data category, and use case; remove global cross-scope exemptions.
+  - [ ] Require authenticated RBAC-protected administration and maker-checker approval for sensitive policy changes.
+  - [ ] Add owner, purpose, ticket/reference, created-by, approved-by, expiry, version, and status metadata.
+  - [ ] Support revocation and immediate cache invalidation without creating fail-open windows.
+  - [ ] Define non-waivable categories that cannot be allowlisted, including card data and authentication secrets.
+  - [ ] Record immutable before/after audit events and provide negative tests for scope leakage and overbroad exemptions.
 
 ---
 
@@ -154,6 +185,70 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 - [x] Document streaming and guardrail modes for the LLM gateway (`docs/concepts/STREAMING.md`)
 - [x] Add a dedicated LLM gateway test harness (`test-scripts/gateway-test`) covering safe/unsafe, streaming and PII scenarios
 - [ ] Document and implement in-code version reporting for SDKs (e.g. `tszclient-go` `Version` constant and aligning with tags)
+
+### Bring Your Gateway (BYG) Integration Framework
+
+**Goal:** Allow users to attach TSZ guardrails to an existing API or AI gateway without replacing its routing, authentication, rate limiting, provider management or operational tooling. Envoy Gateway and Envoy AI Gateway will be the first reference adapters; the internal contract must remain gateway-neutral.
+
+- [ ] Define and document the gateway-neutral BYG processing contract (request/response stages, actions, policy resolution, mutations, metadata, errors and adapter capabilities)
+- [ ] Implement the first native adapter using Envoy External Processing (`ext_proc`) and `EnvoyExtensionPolicy`
+- [ ] Keep Envoy/protobuf/Kubernetes-specific types outside the core guardrail engine so future gateway adapters do not require guardrail rewrites
+- [ ] Support request enforcement first, followed by buffered response enforcement and explicitly scoped streaming modes
+- [ ] Publish and maintain an Envoy Gateway and Envoy AI Gateway compatibility matrix
+- [ ] Add reusable adapter conformance tests for allow, mask, block, audit-only, failure modes, body limits, telemetry and streaming capabilities
+- [ ] Build a native BYG control plane around the existing TSZ policy and audit capabilities:
+  - [ ] Add immutable, versioned compiled-policy snapshots backed by PostgreSQL and distributed through Redis invalidation/version notifications
+  - [ ] Reuse the existing detector, validators, templates, allowlist/blocklist and SIEM pipeline through a transport-neutral policy runtime
+  - [ ] Guarantee atomic policy activation, consistent request/response policy versions and last-known-good rollback
+  - [ ] Add a `TSZGuardrailPolicy` CRD following Gateway API `targetRefs`, section attachment, precedence and status conventions
+  - [ ] Add a TSZ Gateway Controller that resolves policies and reconciles owned `EnvoyExtensionPolicy` resources
+  - [ ] Publish `Accepted`, `ResolvedRefs`, `Programmed`, `PolicySynced`, conflict and degraded status conditions
+  - [ ] Add a PII-safe `io.thyris.tsz` dynamic metadata contract for Envoy access logs and telemetry
+  - [ ] Add adapter capability discovery so unsupported enforcement requirements are rejected rather than silently downgraded
+  - [ ] Add controller leader election, RBAC, readiness, metrics and version-skew handling
+  - [ ] Evaluate Envoy Gateway Extension Server support only as an experimental advanced profile due to xDS privilege and version-coupling risks
+- [ ] Update the core documentation set:
+  - [ ] `README.md` — add Bring Your Gateway to the feature overview and getting-started paths
+  - [ ] `docs/README.md` — add the BYG documentation and examples to the documentation index
+  - [ ] `docs/WHAT_IS_TSZ.md` — explain gateway-neutral deployment and responsibility boundaries
+  - [ ] `docs/PRODUCT_OVERVIEW.md` — describe the BYG product capability and supported gateway model
+  - [ ] `docs/ARCHITECTURE_SECURITY.md` — document trust boundaries, fail-open/fail-closed behavior, data flows, network isolation and mTLS
+  - [ ] `docs/API_REFERENCE.md` — document processor configuration, headers, metadata, actions and error contracts
+  - [ ] `docs/QUICK_START.md` — add a minimal Envoy-based BYG quick start
+  - [ ] `docs/concepts/BRING_YOUR_GATEWAY.md` — add the gateway-neutral architecture, adapter contract and capability model
+  - [ ] `docs/concepts/STREAMING.md` — document BYG async, windowed, halt and strict-streaming guarantees
+  - [ ] `docs/integrations/README.md` — index supported gateways and their compatibility levels
+  - [ ] `docs/integrations/ENVOY_GATEWAY.md` — installation, configuration, verification, troubleshooting and cleanup
+  - [ ] `docs/integrations/ENVOY_AI_GATEWAY.md` — filter ordering, provider transformations, fallback, quotas and known limitations
+  - [ ] `SECURITY.md` — reference the BYG threat model and private vulnerability-reporting expectations
+  - [ ] `CHANGELOG.md` and release notes — identify the adapter maturity level and breaking configuration changes
+- [ ] Provide runnable, self-contained BYG examples with prerequisites, expected output, verification and cleanup instructions:
+  - [ ] Envoy Gateway minimal request inspection
+  - [ ] Request PII masking before the upstream receives the payload
+  - [ ] Request blocking with an OpenAI-compatible error
+  - [ ] Buffered non-streaming response masking and blocking
+  - [ ] Async streaming audit with an explicit leakage warning
+  - [ ] Windowed streaming filtering and stream halt behavior
+  - [ ] Route-owned policy selection that cannot be disabled by a client header
+  - [ ] Fail-open, fail-closed and audit-only rollouts
+  - [ ] Envoy JWT/API-key authentication combined with TSZ guardrails
+  - [ ] Envoy local/global rate limiting combined with TSZ guardrails
+  - [ ] Multi-tenant and per-route guardrail policies
+  - [ ] Shared TSZ processor deployment and sidecar-style deployment
+  - [ ] Envoy-to-TSZ TLS/mTLS and `NetworkPolicy`
+  - [ ] Prometheus, OpenTelemetry and SIEM correlation
+  - [ ] Envoy AI Gateway single-provider flow
+  - [ ] Envoy AI Gateway multi-provider routing and fallback
+  - [ ] Envoy AI Gateway token quota/rate-limit preservation
+  - [ ] Chained-proxy migration example and comparison with native `ext_proc`
+  - [ ] Mock gateway adapter demonstrating how to implement the BYG contract
+  - [ ] Native `TSZGuardrailPolicy` attachment to Gateway, listener and HTTPRoute targets
+  - [ ] Policy precedence, conflict status and unsupported-capability rejection
+  - [ ] Atomic policy update, last-known-good behavior and rollback
+  - [ ] Multiple processor replicas receiving the same policy snapshot version
+  - [ ] Envoy access logs consuming PII-safe `io.thyris.tsz` dynamic metadata
+- [ ] Require every example to be CI-verifiable, free of real credentials, version-pinned where necessary and accompanied by sample safe/unsafe requests
+- [ ] Select the next gateway adapter from Kong, APISIX, NGINX, Traefik, Istio or managed cloud gateways based on adopter demand
 
 ---
 
@@ -219,7 +314,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 **Goal:** Build trust with enterprise and regulated customers through formal security certifications and compliance documentation.
 
-**Note:** Phase 1 (Core Product Hardening) must be completed first. See [docs/SECURITY_ROADMAP.md](docs/SECURITY_ROADMAP.md) for the detailed security roadmap.
+**Note:** Phase 1 (Core Product Hardening) must be completed first. See [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) for the detailed security roadmap.
 
 - [ ] Perform a formal threat model and risk assessment (document in `docs/THREAT_MODEL.md`)
 - [ ] Commission or plan for an external security audit / penetration test by a third-party firm

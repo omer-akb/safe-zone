@@ -8,12 +8,15 @@ This document outlines the security enhancements required to make TSZ production
 
 TSZ currently provides **content detection and guardrails** for PII/sensitive data, but lacks **operational security controls** such as authentication, authorization, rate limiting, and transport security. This roadmap addresses those gaps systematically.
 
-**Timeline:** Q2-Q3 2026  
+**Timeline:** 17 August-25 October 2026 (10 weeks, Q3-Q4 2026)
+
+**Schedule baseline:** Rebaselined in mid-August 2026. Week 1 starts on 17 August 2026.
+
 **Priority:** CRITICAL – Must be completed before Phase 4 (public production releases)
 
 ---
 
-## Milestone 1: HTTP Security Hardening (Week 1-2)
+## Milestone 1: HTTP Security Hardening (17-30 August 2026; Weeks 1-2)
 
 ### Goal
 Make the HTTP layer production-ready with standard security controls.
@@ -71,7 +74,7 @@ Make the HTTP layer production-ready with standard security controls.
 
 ---
 
-## Milestone 2: Authentication & Authorization (Week 2-3)
+## Milestone 2: Authentication & Authorization (24 August-13 September 2026; Weeks 2-4)
 
 ### Goal
 Protect all endpoints with API key / Bearer token authentication and role-based access control.
@@ -156,7 +159,7 @@ Protect all endpoints with API key / Bearer token authentication and role-based 
 
 ---
 
-## Milestone 3: Rate Limiting & DDoS Protection (Week 3-4)
+## Milestone 3: Rate Limiting & DDoS Protection (7-20 September 2026; Weeks 4-5)
 
 ### Goal
 Prevent abuse with rate limiting and traffic shaping.
@@ -197,7 +200,7 @@ Prevent abuse with rate limiting and traffic shaping.
 
 ---
 
-## Milestone 4: Data Protection & Encryption (Week 4-5)
+## Milestone 4: Data Protection & Encryption (14-27 September 2026; Weeks 5-6)
 
 ### Goal
 Encrypt sensitive data at rest and in transit.
@@ -273,7 +276,7 @@ Encrypt sensitive data at rest and in transit.
 
 ---
 
-## Milestone 5: Audit Logging & Monitoring (Week 5-6)
+## Milestone 5: Audit Logging & Monitoring (21 September-4 October 2026; Weeks 6-7)
 
 ### Goal
 Enable security events logging and alerting.
@@ -352,7 +355,7 @@ Enable security events logging and alerting.
 
 ---
 
-## Milestone 6: Vulnerability Management (Week 6-7)
+## Milestone 6: Vulnerability Management (28 September-11 October 2026; Weeks 7-8)
 
 ### Goal
 Build automated scanning and dependency management.
@@ -398,7 +401,7 @@ Build automated scanning and dependency management.
 
 ---
 
-## Milestone 7: Production Hardening & Deployment (Week 7-8)
+## Milestone 7: Production Hardening & Deployment (5-18 October 2026; Weeks 8-9)
 
 ### Goal
 Make deployment and operations secure.
@@ -460,7 +463,7 @@ Make deployment and operations secure.
 
 ---
 
-## Milestone 8: Documentation & Guidelines (Week 8)
+## Milestone 8: Documentation & Guidelines (12-25 October 2026; Weeks 9-10)
 
 ### Goal
 Document all security controls and best practices.
@@ -507,15 +510,15 @@ Document all security controls and best practices.
 
 | Phase | Milestone | Effort | Target |
 |-------|-----------|--------|--------|
-| 1 | HTTP Security Hardening | 1-2 weeks | Week 1-2 |
-| 2 | Authentication & Authorization | 2-3 weeks | Week 2-4 |
-| 3 | Rate Limiting & DDoS | 1 weeks | Week 4-5 |
-| 4 | Data Protection & TLS | 1 week | Week 5-6 |
-| 5 | Audit Logging & Monitoring | 1-2 weeks | Week 6-7 |
-| 6 | Dependency Scanning | 1 week | Week 7-8 |
-| 7 | Production Hardening | 1 week | Week 8-9 |
-| 8 | Documentation & Guidelines | 1 week | Week 9-10 |
-| **Total** | | **10 weeks** | **Q2-Q3 2026** |
+| 1 | HTTP Security Hardening | 1-2 weeks | 17-30 Aug 2026 (Weeks 1-2) |
+| 2 | Authentication & Authorization | 2-3 weeks | 24 Aug-13 Sep 2026 (Weeks 2-4) |
+| 3 | Rate Limiting & DDoS | 1 week | 7-20 Sep 2026 (Weeks 4-5) |
+| 4 | Data Protection & TLS | 1 week | 14-27 Sep 2026 (Weeks 5-6) |
+| 5 | Audit Logging & Monitoring | 1-2 weeks | 21 Sep-4 Oct 2026 (Weeks 6-7) |
+| 6 | Dependency Scanning | 1 week | 28 Sep-11 Oct 2026 (Weeks 7-8) |
+| 7 | Production Hardening | 1 week | 5-18 Oct 2026 (Weeks 8-9) |
+| 8 | Documentation & Guidelines | 1 week | 12-25 Oct 2026 (Weeks 9-10) |
+| **Total** | | **10 weeks** | **17 Aug-25 Oct 2026 (Q3-Q4)** |
 
 ---
 
