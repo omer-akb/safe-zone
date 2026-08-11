@@ -10,7 +10,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 
 **Goal:** Make the current codebase safe and clear to open‑source.
 
-- [x] Choose and apply an open‑source license (recommended: Apache 2.0)
+- [x] Apply the Apache License 2.0
 - [x] Add `LICENSE` file and update all headers/README to reference the new license
 - [x] Add `CONTRIBUTING.md` (how to run, how to submit issues/PRs, code style)
 - [x] Add `CODE_OF_CONDUCT.md`

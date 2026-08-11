@@ -1,15 +1,3 @@
-TSZ PUBLIC ADOPTION LICENSE
-Version 1.0
-
-This license incorporates the terms of the Apache License, Version 2.0,
-reproduced in Part I below, and adds the condition in Part II. Because of that
-additional condition, this license is not the Apache License, Version 2.0, and
-has not been approved by the Apache Software Foundation or the Open Source
-Initiative. References to the Apache License in Part I identify the source of
-those incorporated terms and do not name this combined license.
-
-PART I — APACHE LICENSE, VERSION 2.0 TERMS
-
 Apache License
 Version 2.0, January 2004
 http://www.apache.org/licenses/
@@ -99,56 +87,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
-PART II — ADDITIONAL ADOPTION CONDITION
-
-10. Adoption by Large Commercial Users.
-
-10.1 Applicability. This Section 10 applies to You if both of the following are
-true:
-
-(a) You are a Legal Entity with five hundred (500) or more employees. For this
-purpose, employee count is aggregated across the Legal Entity as defined in
-Section 1, including entities that control, are controlled by, or are under
-common control with You; and
-
-(b) You use the Work in, with, or to provide, operate, or secure a Commercial
-Product. "Commercial Product" means a product or service that is sold,
-licensed, offered for a fee, monetized, or used to generate revenue, whether
-the Work is customer-facing or used internally to provide that product or
-service.
-
-10.2 Adoption requirement. If Section 10 applies to You, You must adopt the
-Work and be identified publicly as an adopter. You must:
-
-(a) submit an accurate adopter entry for the public ADOPTERS.md file at
-https://github.com/thyrisAI/safe-zone/blob/main/ADOPTERS.md; and
-
-(b) follow the adoption procedure at
-https://github.com/thyrisAI/safe-zone/blob/main/docs/ADOPTION.md, including
-providing an authorized contact and a public description of Your use of the
-Work.
-
-The adoption requirement must be completed before the first production use
-that meets Section 10.1. If You already use the Work when You first reach five
-hundred (500) employees, You must begin the adoption procedure within thirty
-(30) calendar days after reaching that threshold. Submission of a complete
-adoption request within the applicable period satisfies the timing requirement
-while the request is under review, provided that You respond in good faith to
-reasonable requests needed to verify or publish the entry.
-
-10.3 Continuing accuracy. While Section 10 applies to You and You continue to
-use the Work, You must keep Your public adopter entry materially accurate. You
-may request updates through the procedure in the adoption guide.
-
-10.4 Other users. Section 10 imposes no additional condition on a person or
-Legal Entity that does not meet both conditions in Section 10.1.
-
-10.5 Effect and conflict. The permissions stated in Part I are offered by the
-Licensor subject to this Part II. If Part I and Part II conflict with respect
-to a use covered by Section 10.1, Part II controls. All other provisions of
-Part I remain in effect.
-
-10.6 No endorsement or trademark grant. An adopter listing is a factual public
-reference only. It does not imply endorsement by either party and does not
-grant any trademark rights beyond those stated in Section 6.
