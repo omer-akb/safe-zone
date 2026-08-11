@@ -1,0 +1,27 @@
+# Manual Phase 1–2 attachment for Envoy Gateway v1.8.3. This targets the
+# mock-openai HTTPRoute from echo-demo.yaml; change targetRefs.name for a
+# different route.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: tsz-request-guardrail
+  namespace: tsz-byg-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: mock-openai
+  extProc:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: tsz-ext-proc
+          port: 9002
+      messageTimeout: 2s
+      failOpen: false
+      processingMode:
+        request:
+          body: Buffered
+      metadata:
+        writableNamespaces:
+          - io.thyris.tsz

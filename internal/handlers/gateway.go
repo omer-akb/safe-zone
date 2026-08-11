@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +29,7 @@ import (
 //  5. For non-streaming calls, optionally apply guardrails on assistant output
 //  6. For streaming calls, proxy the upstream event-stream and, depending on headers,
 //     optionally apply output guardrails in a streaming-safe way (see stream modes below).
-func NewOpenAIChatGateway(detector *guardrails.Detector) http.HandlerFunc {
+func NewOpenAIChatGateway(service guardrails.GuardrailService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed", "method_not_allowed")
@@ -54,7 +55,7 @@ func NewOpenAIChatGateway(detector *guardrails.Detector) http.HandlerFunc {
 		log.Printf("[gateway] RID=%s stream=%v mode=%s onFail=%s guardrails=%v gateway_block_mode=%s", rid, stream, mode, onFail, guardrailsList, config.AppConfig.GatewayBlockMode)
 
 		// 3) Apply input guardrails on user messages
-		sanitizedMessages, blocked, blockMessage, inputDetects := applyInputGuardrails(detector, messages, rid, guardrailsList)
+		sanitizedMessages, blocked, blockMessage, inputDetects := applyInputGuardrails(r.Context(), service, messages, rid, guardrailsList)
 		if blocked {
 			triggeredGuardrails := computeTriggeredGuardrails(inputDetects, nil)
 			log.Printf("[gateway] RID=%s blocked on input guardrails: %s (gateway_block_mode=%s, guardrails=%v)", rid, blockMessage, config.AppConfig.GatewayBlockMode, triggeredGuardrails)
@@ -127,9 +128,9 @@ func NewOpenAIChatGateway(detector *guardrails.Detector) http.HandlerFunc {
 			// Streaming mode: choose strategy based on headers
 			switch mode {
 			case "stream-sync":
-				streamWithOutputGuardrails(detector, rid, guardrailsList, upstreamResp, w, onFail)
+				streamWithOutputGuardrails(service, rid, guardrailsList, upstreamResp, w, onFail)
 			case "stream-async":
-				proxyStreamWithAsyncValidation(detector, rid, guardrailsList, upstreamResp, w)
+				proxyStreamWithAsyncValidation(service, rid, guardrailsList, upstreamResp, w)
 			default: // "final-only" or unknown
 				proxyStreamResponse(w, upstreamResp)
 			}
@@ -137,7 +138,7 @@ func NewOpenAIChatGateway(detector *guardrails.Detector) http.HandlerFunc {
 		}
 
 		// Non-streaming: apply output guardrails on the full assistant response
-		processNonStreamResponse(detector, rid, guardrailsList, upstreamResp, w, inputDetects)
+		processNonStreamResponse(r.Context(), service, rid, guardrailsList, upstreamResp, w, inputDetects)
 		log.Printf("[gateway] RID=%s non-stream response completed with status=%d", rid, upstreamResp.StatusCode)
 	}
 }
@@ -201,7 +202,7 @@ func extractGatewayStreamOptions(r *http.Request) (mode, onFail string) {
 }
 
 // applyInputGuardrails runs detection/guardrails on user messages and returns sanitized messages.
-func applyInputGuardrails(detector *guardrails.Detector, messages []interface{}, rid string, guardrailsList []string) ([]interface{}, bool, string, []models.DetectResponse) {
+func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailService, messages []interface{}, rid string, guardrailsList []string) ([]interface{}, bool, string, []models.DetectResponse) {
 	blocked := false
 	blockMessage := ""
 	var detectResponses []models.DetectResponse
@@ -223,11 +224,16 @@ func applyInputGuardrails(detector *guardrails.Detector, messages []interface{},
 			continue
 		}
 
-		resp := detector.Detect(models.DetectRequest{
+		resp, err := guardrails.DetectLegacy(ctx, service, models.DetectRequest{
 			Text:       content,
 			RID:        rid,
 			Guardrails: guardrailsList,
 		})
+		if err != nil {
+			blocked = true
+			blockMessage = "Guardrail inspection failed"
+			break
+		}
 
 		detectResponses = append(detectResponses, resp)
 
@@ -277,7 +283,7 @@ func sendDirectUpstreamRequest(payload map[string]interface{}) (*http.Response, 
 }
 
 // processNonStreamResponse reads the upstream JSON response and applies output guardrails.
-func processNonStreamResponse(detector *guardrails.Detector, rid string, guardrailsList []string, upstreamResp *http.Response, w http.ResponseWriter, inputDetects []models.DetectResponse) {
+func processNonStreamResponse(ctx context.Context, service guardrails.GuardrailService, rid string, guardrailsList []string, upstreamResp *http.Response, w http.ResponseWriter, inputDetects []models.DetectResponse) {
 	upstreamBody, err := io.ReadAll(upstreamResp.Body)
 	if err != nil {
 		log.Printf("Failed to read upstream response body: %v", err)
@@ -307,11 +313,15 @@ func processNonStreamResponse(detector *guardrails.Detector, rid string, guardra
 				}
 
 				// Output guardrails
-				outResp := detector.Detect(models.DetectRequest{
+				outResp, inspectErr := guardrails.DetectLegacy(ctx, service, models.DetectRequest{
 					Text:       content,
 					RID:        rid + "-OUT",
 					Guardrails: guardrailsList,
 				})
+				if inspectErr != nil {
+					writeOpenAIError(w, http.StatusInternalServerError, "Guardrail inspection failed", "guardrail_error")
+					return
+				}
 
 				outputDetects = append(outputDetects, outResp)
 

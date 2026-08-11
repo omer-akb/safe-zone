@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.14-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -50,7 +50,7 @@ jobs:
           --health-cmd="pg_isready -U postgres" --health-interval=10s --health-timeout=5s --health-retries=5
 
       redis:
-        image: redis:7
+        image: redis:7.4.9-alpine
         ports:
           - 6379:6379
         options: >-
@@ -99,12 +99,18 @@ jobs:
           TSZ_BASE_URL: http://localhost:8080
         run: go test ./tests/integration/...
 
+      - name: Run policy migration and Redis integration tests
+        env:
+          TSZ_POLICY_TEST_DSN: postgres://postgres:postgres@localhost:5432/thyris?sslmode=disable
+          TSZ_POLICY_TEST_REDIS_URL: redis://localhost:6379/0
+        run: go test ./internal/extproc/policy/...
+
   integration-tests-auth:
     name: Integration tests (auth enabled)
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.14-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -115,7 +121,7 @@ jobs:
           --health-cmd="pg_isready -U postgres" --health-interval=10s --health-timeout=5s --health-retries=5
 
       redis:
-        image: redis:7
+        image: redis:7.4.9-alpine
         ports:
           - 6379:6379
         options: >-
@@ -178,7 +184,7 @@ jobs:
       - integration-tests-auth
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.14-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -189,7 +195,7 @@ jobs:
           --health-cmd="pg_isready -U postgres" --health-interval=10s --health-timeout=5s --health-retries=5
 
       redis:
-        image: redis:7
+        image: redis:7.4.9-alpine
         ports:
           - 6379:6379
         options: >-
