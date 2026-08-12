@@ -166,6 +166,6 @@ We welcome community contributions.
 
 ## License
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for the full text.
-
-Unless otherwise noted, all contributions to this repository are also licensed under the Apache License 2.0.
+This project is licensed under the [Apache License 2.0](LICENSE). Unless
+otherwise noted, all contributions to this repository are licensed under the
+same terms.

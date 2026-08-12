@@ -10,7 +10,7 @@ readme = "README.md"
 authors = [
     { name = "Thyris AI" }
 ]
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE" }
 requires-python = ">=3.8"
 dependencies = [
     "requests>=2.0"

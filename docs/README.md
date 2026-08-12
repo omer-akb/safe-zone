@@ -87,11 +87,11 @@ If you are evaluating TSZ in a POC, we recommend starting with:
 
 ## Open Source & Governance
 
-TSZ is released as open source under the **Apache License 2.0**.
+TSZ is released under the [Apache License 2.0](../LICENSE).
 
 At the repository root you will find:
 
-- `LICENSE` – full license text (Apache 2.0)
+- `LICENSE` – full Apache License 2.0 text
 - `CONTRIBUTING.md` – how to set up a dev environment, run tests and contribute
 - `CODE_OF_CONDUCT.md` – community standards and expected behavior
 - `SECURITY.md` – vulnerability disclosure and security contact details

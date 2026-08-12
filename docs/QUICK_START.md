@@ -30,6 +30,11 @@ cd safe-zone
 ## 3. Configure Environment (Optional)
 
 A default configuration is already provided in `docker-compose.yml` and `.env.example`.
+If you want to override settings, copy the example file to `.env` (Docker Compose loads it automatically):
+
+```bash
+cp .env.example .env
+```
 
 Key environment variables:
 
@@ -87,6 +92,12 @@ From the repository root:
 
 ```bash
 docker-compose up --build -d
+```
+
+If you are using Docker Compose v2, you can run:
+
+```bash
+docker compose up --build -d
 ```
 
 This will start:
