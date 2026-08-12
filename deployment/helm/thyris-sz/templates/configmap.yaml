@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "thyris-sz.fullname" . }}-config
+  labels:
+    {{- include "thyris-sz.labels" . | nindent 4 }}
+data:
+  SERVER_PORT: {{ .Values.config.serverPort | quote }}
+  PII_MODE: {{ .Values.config.piiMode | quote }}
+  APP_MODE: {{ .Values.config.appMode | quote }}
+  GATEWAY_BLOCK_MODE: {{ .Values.config.gatewayBlockMode | quote }}
+  AI_PROVIDER: {{ .Values.config.aiProvider | quote }}
+  AI_MODEL_URL: {{ .Values.config.aiModelUrl | quote }}
+  AI_MODEL: {{ .Values.config.aiModel | quote }}
+  FEATURE_AI_SEMANTIC_ANALYSIS: {{ .Values.config.featureAiSemanticAnalysis | quote }}
+  FEATURE_JSON_SCHEMA_VALIDATION: {{ .Values.config.featureJsonSchemaValidation | quote }}
+  STREAM_MAX_BUFFER_BYTES: {{ .Values.config.streamMaxBufferBytes | quote }}
+  STREAM_FAIL_MODE: {{ .Values.config.streamFailMode | quote }}
+  SECURITY_HEADERS_ENABLED: {{ .Values.config.securityHeadersEnabled | quote }}
+  CORS_ENABLED: {{ .Values.config.corsEnabled | quote }}
+  CORS_ALLOWED_ORIGINS: {{ .Values.config.corsAllowedOrigins | quote }}
+  CORS_ALLOWED_METHODS: {{ .Values.config.corsAllowedMethods | quote }}
+  CORS_ALLOWED_HEADERS: {{ .Values.config.corsAllowedHeaders | quote }}
+  CORS_MAX_AGE: {{ .Values.config.corsMaxAge | quote }}
+  MAX_REQUEST_SIZE_BYTES: {{ .Values.config.maxRequestSizeBytes | quote }}
+  HANDLER_TIMEOUT_DETECT_SECONDS: {{ .Values.config.handlerTimeoutDetectSeconds | quote }}
+  HANDLER_TIMEOUT_CHAT_SECONDS: {{ .Values.config.handlerTimeoutChatSeconds | quote }}
+  HTTP_READ_TIMEOUT_SECONDS: {{ .Values.config.httpReadTimeoutSeconds | quote }}
+  HTTP_WRITE_TIMEOUT_SECONDS: {{ .Values.config.httpWriteTimeoutSeconds | quote }}
+  HTTP_IDLE_TIMEOUT_SECONDS: {{ .Values.config.httpIdleTimeoutSeconds | quote }}
+  HTTP_MAX_HEADER_BYTES: {{ .Values.config.httpMaxHeaderBytes | quote }}
+  VALIDATE_CONTENT_TYPE: {{ .Values.config.validateContentType | quote }}
+  AUTH_ENABLED: {{ .Values.config.authEnabled | quote }}
+  AUTH_REQUIRE_BEARER_TOKEN: {{ .Values.config.authRequireBearerToken | quote }}
+  AUTH_PUBLIC_PATHS: {{ .Values.config.authPublicPaths | quote }}
+  AUTH_TOKEN_PERMISSIONS: {{ .Values.config.authTokenPermissions | quote }}
+  RATELIMIT_ENABLED: {{ .Values.config.rateLimitEnabled | quote }}
+  RATELIMIT_REQUESTS_PER_SECOND: {{ .Values.config.rateLimitRequestsPerSecond | quote }}
+  RATELIMIT_BURST: {{ .Values.config.rateLimitBurst | quote }}
+  RATELIMIT_DETECT_PER_MINUTE: {{ .Values.config.rateLimitDetectPerMinute | quote }}
+  RATELIMIT_CHAT_PER_MINUTE: {{ .Values.config.rateLimitChatPerMinute | quote }}
+  RATELIMIT_PATTERNS_PER_MINUTE: {{ .Values.config.rateLimitPatternsPerMinute | quote }}
+  RATELIMIT_ADMIN_PER_MINUTE: {{ .Values.config.rateLimitAdminPerMinute | quote }}
+  CONFIDENCE_ALLOW_THRESHOLD: {{ .Values.config.confidenceAllowThreshold | quote }}
+  CONFIDENCE_BLOCK_THRESHOLD: {{ .Values.config.confidenceBlockThreshold | quote }}
+  AWS_BEDROCK_REGION: {{ .Values.config.awsBedrockRegion | quote }}
+  AWS_BEDROCK_ENDPOINT_OVERRIDE: {{ .Values.config.awsBedrockEndpointOverride | quote }}
+  AWS_BEDROCK_MODEL_ID: {{ .Values.config.awsBedrockModelId | quote }}

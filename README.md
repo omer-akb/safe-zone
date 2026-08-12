@@ -4,24 +4,6 @@ TSZ (Thyris Safe Zone) is a PII Detection and Guardrails System engineered by **
 
 TSZ provides real‑time scanning, redaction, and blocking capabilities so that you can safely integrate LLMs and third‑party APIs into your existing applications.
 
-### Sponsors
-
-<div align="center" style="border:1px solid #30363d; border-radius:12px; padding:20px; max-width:600px; margin:auto;">
-  <table>
-    <tr>
-      <td>
-        <img src="https://github.com/user-attachments/assets/9ad7a9e1-2db3-4e1f-b07f-d6fed5bfdb33" alt="Termius Logo" width="60"/>
-      </td>
-      <td style="padding-left:15px;">
-        <strong>Termius</strong><br/>
-        <a href="https://termius.com">Termius</a> provides a secure, reliable, and collaborative SSH client.
-      </td>
-    </tr>
-  </table>
-  <br/>
-</div>
-
-
 ---
 
 ## Features
@@ -49,6 +31,8 @@ For all user and customer‑facing documentation, see the `docs/` directory:
   `docs/PRODUCT_OVERVIEW.md`
 - **Quick Start Guide** – Run TSZ locally and call `/detect`  
   `docs/QUICK_START.md`
+- **Deployment Guide** – Deploy TSZ to Kubernetes with Helm  
+  `docs/DEPLOYMENT.md`
 - **API Reference (Enterprise)** – Full REST API documentation  
   `docs/API_REFERENCE.md`
 - **Architecture & Security Overview** – Architecture, data flows, security controls  
@@ -63,7 +47,8 @@ If you are evaluating TSZ for the first time, we recommend the following order:
 1. `docs/WHAT_IS_TSZ.md`
 2. `docs/PRODUCT_OVERVIEW.md`
 3. `docs/QUICK_START.md`
-4. `docs/API_REFERENCE.md`
+4. `docs/DEPLOYMENT.md`
+5. `docs/API_REFERENCE.md`
 
 For a more detailed map of the documentation set, see `docs/README.md`.
 
@@ -181,6 +166,6 @@ We welcome community contributions.
 
 ## License
 
-This project is licensed under the **Apache License, Version 2.0**. See the [LICENSE](LICENSE) file for the full text.
-
-Unless otherwise noted, all contributions to this repository are also licensed under the Apache License 2.0.
+This project is licensed under the [Apache License 2.0](LICENSE). Unless
+otherwise noted, all contributions to this repository are licensed under the
+same terms.

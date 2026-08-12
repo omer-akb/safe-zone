@@ -1,0 +1,15 @@
+apiVersion: v2
+name: thyris-sz
+description: Helm chart for deploying TSZ (Thyris Safe Zone) with optional PostgreSQL and Redis
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - thyris
+  - safe-zone
+  - pii
+  - guardrails
+  - llm-security
+maintainers:
+  - name: Thyris.AI
+    email: open-source@thyris.ai

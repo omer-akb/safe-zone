@@ -41,3 +41,5 @@ venv/
 /build
 /tszclient_py.egg-info
 thyris-sz
+!deployment/helm/thyris-sz/
+!deployment/helm/thyris-sz/**
