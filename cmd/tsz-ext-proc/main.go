@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"thyris-sz/internal/cache"
@@ -67,7 +69,19 @@ func main() {
 		log.Println("BYG example audit fault injection is enabled")
 		auditor = exampleFaultAuditor{}
 	}
-	transport, err := envoy.NewServerWithSettings(processor, policyCache, auditor, envoy.ServerSettings{
+	resolutionMode, err := policyResolutionMode()
+	if err != nil {
+		log.Fatalf("invalid policy resolution mode: %v", err)
+	}
+	resolver := extproc.PolicyResolver(extproc.HeaderPolicyResolver{})
+	if resolutionMode == "attribute" {
+		bindings, err := policy.NewPostgresRoutePolicyBindingStore(sqlDB)
+		if err != nil {
+			log.Fatalf("initialize native route binding store: %v", err)
+		}
+		resolver = extproc.AttributePolicyResolver{Mapping: bindings}
+	}
+	transport, err := envoy.NewServerWithResolverAndSettings(processor, policyCache, resolver, auditor, envoy.ServerSettings{
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
 		ProcessingTimeout: extProcConfig.ProcessingTimeout,
 	}, extProcConfig.MaxConcurrentStreams)
@@ -111,4 +125,21 @@ func main() {
 		log.Fatalf("tsz-ext-proc exited after server failure: %v", serveErr)
 	}
 	log.Println("tsz-ext-proc stopped")
+}
+
+// policyResolutionMode selects exactly one global policy identity source for
+// the ext-proc deployment. TSZ_POLICY_RESOLVER is retained as a compatibility
+// alias for manifests created before the explicit MODE name was introduced.
+func policyResolutionMode() (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("TSZ_POLICY_RESOLUTION_MODE")))
+	if mode == "" {
+		mode = strings.ToLower(strings.TrimSpace(os.Getenv("TSZ_POLICY_RESOLVER")))
+	}
+	if mode == "" {
+		return "header", nil
+	}
+	if mode != "header" && mode != "attribute" {
+		return "", fmt.Errorf("TSZ_POLICY_RESOLUTION_MODE must be header or attribute, got %q", mode)
+	}
+	return mode, nil
 }
