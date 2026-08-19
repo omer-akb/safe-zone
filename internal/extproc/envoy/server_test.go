@@ -727,6 +727,65 @@ func TestServerFailurePolicyOverridesDeploymentDefaultAndAuditsDegradedResult(t 
 	}
 }
 
+func TestServerUsesResponseFailurePolicyForResponseProcessorFailures(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		requestFailure  policy.FailureMode
+		responseFailure policy.FailureMode
+		wantBlock       bool
+	}{
+		{name: "response closed overrides request open", requestFailure: policy.FailureModeOpen, responseFailure: policy.FailureModeClosed, wantBlock: true},
+		{name: "response open overrides request closed", requestFailure: policy.FailureModeClosed, responseFailure: policy.FailureModeOpen, wantBlock: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{
+				PolicyID: "default", Version: 1,
+				Definition: policy.PolicyDefinition{FailurePolicy: policy.FailurePolicy{
+					Request: test.requestFailure, Response: test.responseFailure,
+				}},
+			}}
+			server, err := NewServerWithSettings(processorFunc(func(_ context.Context, request ProcessingRequest) (ProcessingResult, error) {
+				if request.Stage == StageResponse && request.Body != nil {
+					return ProcessingResult{}, errors.New("injected response processor failure")
+				}
+				return ProcessingResult{Action: ActionAllow}, nil
+			}), cache, nil, ServerSettings{FailMode: policy.FailureModeClosed, MaxBodyBytes: 1024, ProcessingTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			client := newExternalProcessorTestClientForServer(t, server)
+			stream, err := client.Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			for _, message := range []*extprocv3.ProcessingRequest{
+				requestHeadersMessageWithEndOfStream("ignored", "envoy-response-failure", "default", true),
+				responseHeadersForAdapterTest(false),
+			} {
+				if err := stream.Send(message); err != nil {
+					t.Fatalf("send headers: %v", err)
+				}
+				if _, err := stream.Recv(); err != nil {
+					t.Fatalf("receive headers response: %v", err)
+				}
+			}
+			if err := stream.Send(responseBodyForAdapterTest([]byte("response"), true)); err != nil {
+				t.Fatalf("send response body: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response body result: %v", err)
+			}
+			if (response.GetImmediateResponse() != nil) != test.wantBlock {
+				t.Fatalf("request=%q response=%q result=%+v wantBlock=%v", test.requestFailure, test.responseFailure, response, test.wantBlock)
+			}
+			if !test.wantBlock && response.GetResponseBody() == nil {
+				t.Fatalf("fail-open response must continue, got %+v", response)
+			}
+		})
+	}
+}
+
 func TestServerRejectsOversizeBodyWith413BeforeUpstream(t *testing.T) {
 	upstream := &mockUpstream{}
 	cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1}}
@@ -759,6 +818,89 @@ func TestServerRejectsOversizeBodyWith413BeforeUpstream(t *testing.T) {
 	}
 	if response.GetImmediateResponse().GetStatus().GetCode() != typev3.StatusCode_PayloadTooLarge || upstream.requests.Load() != 0 {
 		t.Fatalf("413 response=%+v upstream=%d", response, upstream.requests.Load())
+	}
+}
+
+func TestServerRejectsOversizeResponseBeforeProcessorOrClient(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		declared bool
+	}{
+		{name: "declared content length", declared: true},
+		{name: "buffered body without content length"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var processedResponseBody atomic.Int64
+			server, err := NewServerWithSettings(processorFunc(func(_ context.Context, request ProcessingRequest) (ProcessingResult, error) {
+				if request.Stage == StageResponse && request.Body != nil {
+					processedResponseBody.Add(1)
+				}
+				return ProcessingResult{Action: ActionAllow}, nil
+			}), snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1}}, nil, ServerSettings{FailMode: policy.FailureModeOpen, MaxBodyBytes: 4, ProcessingTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			client := newExternalProcessorTestClientForServer(t, server)
+			stream, err := client.Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			if err := stream.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-response-limit", "default", true)); err != nil {
+				t.Fatalf("send request headers: %v", err)
+			}
+			if _, err := stream.Recv(); err != nil {
+				t.Fatalf("receive request headers: %v", err)
+			}
+			responseHeaders := responseHeadersForAdapterTest(false)
+			if test.declared {
+				responseHeaders.GetResponseHeaders().GetHeaders().Headers = append(responseHeaders.GetResponseHeaders().GetHeaders().Headers,
+					&corev3.HeaderValue{Key: "content-length", RawValue: []byte("5")},
+				)
+			}
+			if err := stream.Send(responseHeaders); err != nil {
+				t.Fatalf("send response headers: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response headers result: %v", err)
+			}
+			if test.declared {
+				assertOversizedResponse(t, response, "response body must be rejected from content-length")
+				if processedResponseBody.Load() != 0 {
+					t.Fatalf("processor saw oversized declared response body %d times", processedResponseBody.Load())
+				}
+				return
+			}
+			if response.GetResponseHeaders() == nil {
+				t.Fatalf("response headers were not allowed: %+v", response)
+			}
+			if err := stream.Send(responseBodyForAdapterTest([]byte("12345"), true)); err != nil {
+				t.Fatalf("send response body: %v", err)
+			}
+			response, err = stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response body result: %v", err)
+			}
+			assertOversizedResponse(t, response, "buffered response body must be rejected")
+			if processedResponseBody.Load() != 0 {
+				t.Fatalf("processor saw oversized buffered response body %d times", processedResponseBody.Load())
+			}
+		})
+	}
+}
+
+func assertOversizedResponse(t *testing.T, response *extprocv3.ProcessingResponse, context string) {
+	t.Helper()
+	immediate := response.GetImmediateResponse()
+	if immediate == nil || immediate.GetStatus().GetCode() != typev3.StatusCode_BadGateway {
+		t.Fatalf("%s: response=%+v", context, response)
+	}
+	var payload blockErrorResponse
+	if err := json.Unmarshal(immediate.GetBody(), &payload); err != nil {
+		t.Fatalf("%s: decode body: %v; body=%q", context, err, immediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_BODY_TOO_LARGE" {
+		t.Fatalf("%s: payload=%+v", context, payload)
 	}
 }
 

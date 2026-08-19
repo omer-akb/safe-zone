@@ -167,6 +167,8 @@ func responseToEnvoy(kind envoyMessageKind, stage ProcessingStage, result Proces
 			statusCode = typev3.StatusCode_Forbidden
 		case 413:
 			statusCode = typev3.StatusCode_PayloadTooLarge
+		case 502:
+			statusCode = typev3.StatusCode_BadGateway
 		}
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_ImmediateResponse{ImmediateResponse: &extprocv3.ImmediateResponse{
@@ -206,6 +208,8 @@ func safeBlockResponseBody(metadata SafeMetadata, immediateStatus int, stage Pro
 	code, message := blockErrorCode, blockErrorMessage
 	if immediateStatus == 413 {
 		code, message = "TSZ_REQUEST_BODY_TOO_LARGE", "Request body exceeds configured limit."
+	} else if immediateStatus == 502 {
+		code, message = "TSZ_RESPONSE_BODY_TOO_LARGE", "Response body exceeds configured limit."
 	} else if stage == StageResponse {
 		code, message = "TSZ_RESPONSE_GUARDRAIL_BLOCKED", "Response blocked by guardrail policy."
 	}

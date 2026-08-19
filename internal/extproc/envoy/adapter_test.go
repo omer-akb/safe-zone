@@ -242,6 +242,26 @@ func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
 	if strings.Contains(responseBlocked.GetDynamicMetadata().String(), rawResponseContent) {
 		t.Fatalf("response dynamic metadata leaked raw response content: %s", responseBlocked.GetDynamicMetadata())
 	}
+	oversizedResponse, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{
+		Action: ActionBlock, ImmediateStatus: 502, Body: []byte(rawResponseContent),
+		Metadata: SafeMetadata{RID: "rid-oversized-response", RequestID: "envoy-oversized-response"},
+	})
+	if err != nil {
+		t.Fatalf("responseToEnvoy(oversized response) error = %v", err)
+	}
+	oversizedImmediate := oversizedResponse.GetImmediateResponse()
+	if oversizedImmediate == nil || oversizedImmediate.GetStatus().GetCode() != typev3.StatusCode_BadGateway {
+		t.Fatalf("oversized response = %+v", oversizedResponse)
+	}
+	if err := json.Unmarshal(oversizedImmediate.GetBody(), &payload); err != nil {
+		t.Fatalf("decode oversized response body: %v; body=%q", err, oversizedImmediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_BODY_TOO_LARGE" || payload.Error.Message != "Response body exceeds configured limit." {
+		t.Fatalf("oversized response payload = %+v", payload)
+	}
+	if strings.Contains(string(oversizedImmediate.GetBody()), rawResponseContent) {
+		t.Fatalf("oversized response leaked raw body: %q", oversizedImmediate.GetBody())
+	}
 
 	withMetadata, err := responseToEnvoy(envoyRequestHeaders, StageRequest, ProcessingResult{
 		Action:   ActionAllow,

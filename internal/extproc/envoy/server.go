@@ -22,14 +22,15 @@ import (
 // streamState belongs to one Process invocation only. It is never shared
 // across streams or stored in package-level mutable state.
 type streamState struct {
-	rid               string
-	envoyReqID        string
-	policyID          string
-	policySnapshot    policy.CompiledSnapshot
-	hasPolicySnapshot bool
-	policyPinned      bool
-	failureMode       policy.FailureMode
-	protocol          *envoyStreamState
+	rid                 string
+	envoyReqID          string
+	policyID            string
+	policySnapshot      policy.CompiledSnapshot
+	hasPolicySnapshot   bool
+	policyPinned        bool
+	requestFailureMode  policy.FailureMode
+	responseFailureMode policy.FailureMode
+	protocol            *envoyStreamState
 }
 
 func newStreamState() *streamState {
@@ -176,20 +177,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			state.pinPolicy(request, s.policyCache, s.defaultFailureMode)
 		}
 		state.apply(&request)
-		if kind == envoyRequestHeaders && exceedsDeclaredBodyLimit(request.Headers, s.maxBodyBytes) {
-			result := ProcessingResult{Action: ActionBlock, ImmediateStatus: 413}
-			enrichResultIdentity(&result, request, kind, 0)
-			response, adaptErr := responseToEnvoy(kind, request.Stage, result)
-			if adaptErr != nil {
-				return status.Error(codes.Internal, adaptErr.Error())
-			}
-			if err := stream.Send(response); err != nil {
-				return err
-			}
-			return nil
-		}
-		if kind == envoyRequestBody && int64(len(request.Body)) > s.maxBodyBytes {
-			result := ProcessingResult{Action: ActionBlock, ImmediateStatus: 413}
+		if immediateStatus, exceeded := bodyLimitStatus(kind, request.Headers, request.Body, s.maxBodyBytes); exceeded {
+			result := ProcessingResult{Action: ActionBlock, ImmediateStatus: immediateStatus}
 			enrichResultIdentity(&result, request, kind, 0)
 			response, adaptErr := responseToEnvoy(kind, request.Stage, result)
 			if adaptErr != nil {
@@ -298,7 +287,8 @@ func (state *streamState) pinPolicy(request ProcessingRequest, cache PolicyCache
 		return
 	}
 	state.policyPinned = true
-	state.failureMode = defaultMode
+	state.requestFailureMode = defaultMode
+	state.responseFailureMode = defaultMode
 	state.envoyReqID = request.EnvoyReqID
 	state.policyID = strings.TrimSpace(request.PolicyID)
 	if state.policyID == "" {
@@ -311,7 +301,10 @@ func (state *streamState) pinPolicy(request ProcessingRequest, cache PolicyCache
 	state.policySnapshot = snapshot.Clone()
 	state.hasPolicySnapshot = true
 	if mode := state.policySnapshot.Definition.FailurePolicy.Request; mode != "" {
-		state.failureMode = mode
+		state.requestFailureMode = mode
+	}
+	if mode := state.policySnapshot.Definition.FailurePolicy.Response; mode != "" {
+		state.responseFailureMode = mode
 	}
 }
 
@@ -329,6 +322,24 @@ func exceedsDeclaredBodyLimit(headers map[string][]string, maximum int64) bool {
 	}
 	length, err := strconv.ParseInt(value, 10, 64)
 	return err == nil && length > maximum
+}
+
+// bodyLimitStatus treats buffered response bodies as a separate gateway
+// failure from oversized client requests. The limits themselves are symmetric,
+// while 413 remains reserved for client-supplied request content.
+func bodyLimitStatus(kind envoyMessageKind, headers map[string][]string, body []byte, maximum int64) (int, bool) {
+	switch kind {
+	case envoyRequestHeaders:
+		return 413, exceedsDeclaredBodyLimit(headers, maximum)
+	case envoyRequestBody:
+		return 413, int64(len(body)) > maximum
+	case envoyResponseHeaders:
+		return 502, exceedsDeclaredBodyLimit(headers, maximum)
+	case envoyResponseBody:
+		return 502, int64(len(body)) > maximum
+	default:
+		return 0, false
+	}
 }
 
 func enrichResultIdentity(result *ProcessingResult, request ProcessingRequest, kind envoyMessageKind, latency time.Duration) {
@@ -375,11 +386,18 @@ func (state *streamState) apply(request *ProcessingRequest) {
 	request.RID = state.rid
 	request.EnvoyReqID = state.envoyReqID
 	request.PolicyID = state.policyID
-	request.FailureMode = state.failureMode
+	request.FailureMode = state.failureModeFor(request.Stage)
 	if !state.hasPolicySnapshot {
 		return
 	}
 	snapshot := state.policySnapshot.Clone()
 	request.PolicyVersion = snapshot.Version
 	request.PolicySnapshot = &snapshot
+}
+
+func (state *streamState) failureModeFor(stage ProcessingStage) policy.FailureMode {
+	if stage == StageResponse {
+		return state.responseFailureMode
+	}
+	return state.requestFailureMode
 }
