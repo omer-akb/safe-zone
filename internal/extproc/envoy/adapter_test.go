@@ -204,8 +204,22 @@ func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
 	if blockHeaders["content-type"] != "application/json" || blockHeaders["content-length"] != stringLength(immediate.GetBody()) {
 		t.Fatalf("BLOCK headers = %v, body length = %d", blockHeaders, len(immediate.GetBody()))
 	}
-	if _, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionBlock}); err == nil {
-		t.Fatal("response-stage BLOCK was accepted in Phase 1")
+	responseBlocked, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{
+		Action: ActionBlock, ImmediateStatus: 403,
+		Metadata: SafeMetadata{RID: "rid-response", RequestID: "envoy-response", PolicyID: "policy-1", PolicyVersion: 7},
+	})
+	if err != nil {
+		t.Fatalf("responseToEnvoy(response BLOCK) error = %v", err)
+	}
+	responseImmediate := responseBlocked.GetImmediateResponse()
+	if responseImmediate == nil || responseImmediate.GetStatus().GetCode() != typev3.StatusCode_Forbidden {
+		t.Fatalf("response BLOCK = %+v", responseBlocked)
+	}
+	if err := json.Unmarshal(responseImmediate.GetBody(), &payload); err != nil {
+		t.Fatalf("decode response block body: %v; body=%q", err, responseImmediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_GUARDRAIL_BLOCKED" || payload.Error.Message != "Response blocked by guardrail policy." {
+		t.Fatalf("response BLOCK payload = %+v", payload)
 	}
 
 	withMetadata, err := responseToEnvoy(envoyRequestHeaders, StageRequest, ProcessingResult{

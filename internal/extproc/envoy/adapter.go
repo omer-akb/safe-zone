@@ -157,15 +157,15 @@ func responseToEnvoy(kind envoyMessageKind, stage ProcessingStage, result Proces
 		return nil, fmt.Errorf("convert safe metadata: %w", err)
 	}
 	if result.Action == ActionBlock {
-		if stage != StageRequest {
-			return nil, errors.New("Phase 1 does not support blocking response messages")
-		}
-		body, err := safeBlockResponseBody(result.Metadata, result.ImmediateStatus)
+		body, err := safeBlockResponseBody(result.Metadata, result.ImmediateStatus, stage)
 		if err != nil {
 			return nil, fmt.Errorf("serialize safe block response: %w", err)
 		}
 		statusCode := typev3.StatusCode_BadRequest
-		if result.ImmediateStatus == 413 {
+		switch result.ImmediateStatus {
+		case 403:
+			statusCode = typev3.StatusCode_Forbidden
+		case 413:
 			statusCode = typev3.StatusCode_PayloadTooLarge
 		}
 		return &extprocv3.ProcessingResponse{
@@ -202,10 +202,12 @@ func responseToEnvoy(kind envoyMessageKind, stage ProcessingStage, result Proces
 	return response, nil
 }
 
-func safeBlockResponseBody(metadata SafeMetadata, immediateStatus int) ([]byte, error) {
+func safeBlockResponseBody(metadata SafeMetadata, immediateStatus int, stage ProcessingStage) ([]byte, error) {
 	code, message := blockErrorCode, blockErrorMessage
 	if immediateStatus == 413 {
 		code, message = "TSZ_REQUEST_BODY_TOO_LARGE", "Request body exceeds configured limit."
+	} else if stage == StageResponse {
+		code, message = "TSZ_RESPONSE_GUARDRAIL_BLOCKED", "Response blocked by guardrail policy."
 	}
 	return json.Marshal(blockErrorResponse{
 		Error: blockError{Code: code, Message: message},

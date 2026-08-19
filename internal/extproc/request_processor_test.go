@@ -208,6 +208,53 @@ func TestOpenAIRequestProcessorMutatesEveryMatchingUserMessage(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestProcessorMasksAssistantResponseAndUpdatesLength(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if input.Text == "secret assistant value" {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{"id":"kept","choices":[{"message":{"role":"assistant","content":"secret assistant value"}},{"message":{"role":"assistant","content":"safe answer"}}],"usage":{"total_tokens":9}}`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		RID: "rid-response-mask", EnvoyReqID: "envoy-response-mask", Stage: StageResponse, ContentType: "application/json", Body: body,
+		PolicyID: "default", PolicyVersion: 4, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 4, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionMask || result.DetectionCount != 1 || result.Metadata.Stage != StageResponse {
+		t.Fatalf("result = %+v", result)
+	}
+	want := `{"id":"kept","choices":[{"message":{"role":"assistant","content":""}},{"message":{"role":"assistant","content":"safe answer"}}],"usage":{"total_tokens":9}}`
+	if string(result.Body) != want || result.HeaderMutations["content-length"] != strconv.Itoa(len(result.Body)) {
+		t.Fatalf("masked response = %q, headers = %+v", result.Body, result.HeaderMutations)
+	}
+}
+
+func TestOpenAIRequestProcessorBlocksAssistantResponseWithForbiddenStatus(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		return guardrails.InspectResult{Action: guardrails.RuleActionBlock, SafeContent: "must not be used", DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		RID: "rid-response-block", EnvoyReqID: "envoy-response-block", Stage: StageResponse, ContentType: "application/json",
+		Body:     []byte(`{"choices":[{"message":{"role":"assistant","content":"secret response"}}]}`),
+		PolicyID: "default", PolicyVersion: 5, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 5, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionBlock || result.ImmediateStatus != 403 || result.Body != nil || result.HeaderMutations != nil || result.Metadata.Stage != StageResponse {
+		t.Fatalf("blocked response result = %+v", result)
+	}
+}
+
 func compiledPolicyProcessor(t *testing.T) *OpenAIRequestProcessor {
 	t.Helper()
 	service, err := guardrails.NewGuardrailService(&guardrails.Detector{})
@@ -250,5 +297,11 @@ func containsAny(value string, candidates ...string) bool {
 func requestPolicyDefinition() policy.PolicyDefinition {
 	return policy.PolicyDefinition{Request: policy.RequestPolicy{
 		PII: policy.ActionMask, Secret: policy.ActionBlock, PromptInjection: policy.ActionAuditOnly,
+	}}
+}
+
+func responsePolicyDefinition() policy.PolicyDefinition {
+	return policy.PolicyDefinition{Response: policy.ResponsePolicy{
+		Enabled: true, PII: policy.ActionMask, Secret: policy.ActionBlock, UnsafeContent: policy.ActionAuditOnly,
 	}}
 }
