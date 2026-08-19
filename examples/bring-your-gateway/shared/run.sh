@@ -98,6 +98,10 @@ kubectl -n "${namespace}" wait --for=condition=complete "job/${name}" --timeout=
 kubectl apply -f "${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml"
 wait_for_policy_accepted envoyextensionpolicy/tsz-request-guardrail
 wait_for_policy_accepted clienttrafficpolicy/tsz-route-policy-identity
+if [[ -f "${example_dir}/resources.yaml" ]]; then
+  kubectl apply -f "${example_dir}/resources.yaml"
+  wait_for_policy_accepted securitypolicy/tsz-jwt-authentication
+fi
 
 # Replace the bootstrap's simple nginx response with the safety-preserving
 # inspection mock. The mock never retains raw request content.
@@ -128,9 +132,22 @@ kubectl -n "${namespace}" port-forward service/mock-openai "${mock_port}:8080" >
 mock_forward_pid=$!
 sleep 2
 before_sequence="$(curl --silent "http://127.0.0.1:${mock_port}/inspect" | jq -r '.sequence')"
+curl_auth_args=()
+if [[ -f "${example_dir}/jwt-token" ]]; then
+  unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'content-type: application/json' --data-binary "@${example_dir}/request.json" \
+    "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+  [[ "${unauthenticated_status}" == "401" ]] || { echo "missing JWT returned HTTP ${unauthenticated_status}, want 401" >&2; exit 1; }
+  invalid_token_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'content-type: application/json' --header 'authorization: Bearer invalid.jwt.token' \
+    --data-binary "@${example_dir}/request.json" "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+  [[ "${invalid_token_status}" == "401" ]] || { echo "invalid JWT returned HTTP ${invalid_token_status}, want 401" >&2; exit 1; }
+  curl_auth_args=(--header "authorization: Bearer $(<"${example_dir}/jwt-token")")
+fi
 status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http_code}' \
   --header 'content-type: application/json' \
   --header 'X-TSZ-Policy: client-must-not-win' \
+  "${curl_auth_args[@]}" \
   --data-binary "@${example_dir}/request.json" \
   "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
 [[ "${status}" == "${expected_status}" ]] || {
@@ -154,7 +171,7 @@ if [[ "${status}" == "400" ]]; then
     echo "blocked request reached the mock upstream" >&2; exit 1;
   }
 fi
-if [[ "$(basename "${example_dir}")" == "02-request-masking" ]]; then
+if [[ "$(basename "${example_dir}")" == "02-request-masking" || -f "${example_dir}/expect-mask" ]]; then
   [[ "$(jq -r '.masked' <<<"${after}")" == "true" ]] || {
     echo "mock upstream did not observe an EMAIL mask placeholder" >&2; exit 1;
   }

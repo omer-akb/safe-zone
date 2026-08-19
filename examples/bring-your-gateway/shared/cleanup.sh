@@ -5,6 +5,9 @@ if [[ -n "${example_dir}" ]]; then
   name="tsz-example-$(basename "${example_dir}")"
   name="${name//[^a-z0-9-]/-}"
   kubectl -n tsz-byg-demo delete job,configmap "${name}" --ignore-not-found
+  if [[ -f "${example_dir}/resources.yaml" ]]; then
+    kubectl delete -f "${example_dir}/resources.yaml" --ignore-not-found
+  fi
 fi
 kubectl -n tsz-byg-demo delete -f deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml --ignore-not-found
 # Failure examples enable a local-only fault on the Deployment. Always remove
