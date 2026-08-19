@@ -62,6 +62,7 @@ type envoyStreamState struct {
 	responseHeadersSeen bool
 	responseBodySeen    bool
 	responseEnded       bool
+	responseOnly        bool
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -90,9 +91,13 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.requestEnded = typed.RequestHeaders.GetEndOfStream()
 		return contractRequest(StageRequest, headers, nil, attributes), envoyRequestHeaders, nil
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
-		if !state.requestHeadersSeen || !state.requestEnded || state.responseHeadersSeen {
+		if state.responseHeadersSeen || (state.requestHeadersSeen && !state.requestEnded) {
 			return ProcessingRequest{}, "", errors.New("response headers require a completed request and may appear only once")
 		}
+		// A filter that runs before ext_proc can reject a request and produce an
+		// Envoy local reply. In that case Envoy may invoke ext_proc only for the
+		// response path, so there is intentionally no request-side state to pin.
+		state.responseOnly = !state.requestHeadersSeen
 		headers := headersFromEnvoy(typed.ResponseHeaders.GetHeaders())
 		state.response.headers = CloneHeaders(headers)
 		state.responseHeadersSeen = true
@@ -117,6 +122,10 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 	default:
 		return ProcessingRequest{}, "", errors.New("unsupported or empty Envoy processing request")
 	}
+}
+
+func (state *envoyStreamState) isResponseOnly() bool {
+	return state.responseOnly
 }
 
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {

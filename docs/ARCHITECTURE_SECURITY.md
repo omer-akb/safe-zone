@@ -268,6 +268,30 @@ installation profiles.
   default and blocks when TSZ cannot process a stage; `open` is an explicit
   availability-over-enforcement choice. A processing error is never evidence
   that content is safe.
+- If Envoy invokes `ext_proc` only on the response path (for example after an
+  earlier JWT or local-rate-limit rejection), TSZ has no request-pinned policy
+  snapshot. Envoy Gateway v1.8.3 cannot expose a standard trusted local-reply
+  marker before `ext_proc` in that filter order. TSZ uses global
+  `TSZ_FAIL_MODE` for this degraded case: default `closed` returns a safe
+  response-stage `403`; explicit `open` continues it. The processor emits a
+  bounded metric and safe degraded audit event for observability.
+- **Current dependency/readiness behavior:** `tsz-ext-proc` loads compiled
+  snapshots from PostgreSQL once before it becomes ready, then retains that
+  last-known-good in-memory cache if PostgreSQL or Redis becomes unavailable.
+  `/readyz` intentionally does not ping those dependencies for every probe;
+  `/healthz` reports only process liveness. This prevents a short network
+  interruption from removing a processor that can still enforce an immutable
+  snapshot. Instead, it returns `503 NOT READY` when **either** of these
+  conditions holds: `TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD` consecutive full
+  reconcile failures occur (default `3`), **or** the last successful full
+  reconcile is older than `TSZ_POLICY_MAX_STALENESS` (default `5m`). Every
+  successful full reconcile resets the failure count and freshness timestamp.
+  These settings are environment-configurable. The controller deliberately
+  uses stricter dependency-ping readiness because it is a control-plane
+  reconciler; `tsz-ext-proc` is a data-plane enforcer with a safe cached-policy
+  fallback. Native route-policy resolution still queries PostgreSQL at request
+  start, so it can fail closed while the header-based preview resolver
+  continues using cached snapshots.
 - Set Envoy `failOpen: false` as well as TSZ's closed failure policy. Either
   layer configured to bypass processing weakens the enforcement boundary.
 - Restrict the ext_proc gRPC Service with Kubernetes `NetworkPolicy` so only

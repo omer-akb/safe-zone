@@ -37,6 +37,9 @@ type AuditEvent struct {
 	Tenant             string     `json:"tenant,omitempty"`
 	PolicyID           string     `json:"policy_id"`
 	PolicyVersion      int        `json:"policy_version"`
+	// Reason is a bounded operational classification, never detector output or
+	// request/response content.
+	Reason             string     `json:"reason,omitempty"`
 	Stage              AuditStage `json:"stage"`
 	Action             RuleAction `json:"action"`
 	Categories         []string   `json:"categories,omitempty"`

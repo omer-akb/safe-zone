@@ -30,6 +30,7 @@ type Dependencies struct {
 	Redis       *redis.Client
 	PolicyCache PolicyCache
 	Registrar   GRPCRegistrar
+	MetricsHandler http.Handler
 }
 
 // Runtime owns only the ext-proc process lifecycle and transports.
@@ -154,6 +155,9 @@ func (r *Runtime) healthHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("UP"))
 	})
+	if r.dependencies.MetricsHandler != nil {
+		mux.Handle("GET /metrics", r.dependencies.MetricsHandler)
+	}
 	readiness := func(w http.ResponseWriter, _ *http.Request) {
 		if !r.dependencies.PolicyCache.Ready() {
 			http.Error(w, "Policy cache not ready", http.StatusServiceUnavailable)

@@ -59,6 +59,16 @@ if [[ "${TSZ_BYG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
 fi
 export KUBECONFIG="${kubeconfig}"
 
+# Authentication and rate-limit examples attach route-scoped Gateway policies.
+# Remove their known test fixtures before every run so a prior interrupted
+# example cannot short-circuit a later, unrelated guardrail scenario.
+kubectl -n "${namespace}" delete securitypolicy tsz-jwt-authentication --ignore-not-found
+kubectl -n "${namespace}" delete configmap tsz-jwt-authentication --ignore-not-found
+kubectl -n "${namespace}" delete backendtrafficpolicy tsz-local-rate-limit --ignore-not-found
+# Removed in the v1.8.3 response-only fallback design; delete a stale copy
+# from an earlier run so it cannot obscure the real filter ordering.
+kubectl -n "${namespace}" delete backendtrafficpolicy tsz-native-local-reply-marker --ignore-not-found
+
 name="tsz-example-$(basename "${example_dir}")"
 name="${name//[^a-z0-9-]/-}"
 kubectl -n "${namespace}" delete job "${name}" --ignore-not-found
@@ -127,11 +137,14 @@ fi
 kubectl -n "${namespace}" rollout status deployment/mock-openai --timeout=90s
 
 if [[ "$(basename "${example_dir}")" == "05-fail-open" || "$(basename "${example_dir}")" == "06-fail-closed" ]]; then
-  # This affects only the local example Deployment and lets the stream-pinned
-  # failure policy decide after an otherwise safe request is processed.
-  kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE=1
-  kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
+	# This affects only the local example Deployment and lets the stream-pinned
+	# failure policy decide after an otherwise safe request is processed.
+	kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE=1
+else
+	# Do not let the fail-mode fixture leak into the next example run.
+	kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE-
 fi
+kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
 
 envoy_service="$(kubectl -n envoy-gateway-system get service -l "gateway.envoyproxy.io/owning-gateway-namespace=${namespace},gateway.envoyproxy.io/owning-gateway-name=echo-gateway" -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "${envoy_service}" ]] || { echo "Envoy data-plane Service not found" >&2; exit 1; }
@@ -153,11 +166,14 @@ if [[ -f "${example_dir}/jwt-token" ]]; then
   unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --header 'content-type: application/json' --data-binary "@${example_dir}/request.json" \
     "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
-  [[ "${unauthenticated_status}" == "401" ]] || { echo "missing JWT returned HTTP ${unauthenticated_status}, want 401" >&2; exit 1; }
+  # Envoy can call ext_proc only on this JWT local-reply path. There is no
+  # policy-pinned request state, so the default global closed fallback returns
+  # TSZ's safe response-stage block rather than silently allowing it.
+  [[ "${unauthenticated_status}" == "403" ]] || { echo "missing JWT returned HTTP ${unauthenticated_status}, want 403" >&2; exit 1; }
   invalid_token_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
     --header 'content-type: application/json' --header 'authorization: Bearer invalid.jwt.token' \
     --data-binary "@${example_dir}/request.json" "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
-  [[ "${invalid_token_status}" == "401" ]] || { echo "invalid JWT returned HTTP ${invalid_token_status}, want 401" >&2; exit 1; }
+  [[ "${invalid_token_status}" == "403" ]] || { echo "invalid JWT returned HTTP ${invalid_token_status}, want 403" >&2; exit 1; }
   curl_auth_args=(--header "authorization: Bearer $(<"${example_dir}/jwt-token")")
 fi
 status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http_code}' \
@@ -201,7 +217,10 @@ if [[ -f "${example_dir}/rate-limit-requests" ]]; then
       "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
     expected_limited_status=200
     if [[ "$request_number" -gt "$rate_limit_requests" ]]; then
-      expected_limited_status=429
+      # The Envoy local 429 body is not an OpenAI response. With the response
+      # policy's default closed mode, TSZ replaces it with its safe 403 rather
+      # than forwarding an uninspectable body.
+      expected_limited_status=403
     fi
     [[ "$limited_status" == "$expected_limited_status" ]] || {
       echo "request ${request_number} returned HTTP ${limited_status}, want ${expected_limited_status}" >&2; exit 1;

@@ -735,6 +735,9 @@ The manual attachment requires these fields:
 | `TSZ_MAX_GRPC_MESSAGE_BYTES` | `4194304` | Maximum ext_proc gRPC message size. |
 | `TSZ_PROCESSING_TIMEOUT_MS` | `2000` | TSZ processing deadline for one ext_proc message. |
 | `TSZ_MAX_CONCURRENT_STREAMS` | `100` | Maximum concurrent ext_proc streams per processor replica. |
+| `TSZ_POLICY_RECONCILE_INTERVAL` | `30s` | Frequency of PostgreSQL full-cache reconciliation. |
+| `TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD` | `3` | Consecutive reconcile failures that make `/readyz` return `503`. |
+| `TSZ_POLICY_MAX_STALENESS` | `5m` | Maximum age of the last successful reconciliation before `/readyz` returns `503`. |
 | `TSZ_POLICY_RESOLUTION_MODE` | `header` | `header` for the preview profile; `attribute` for the native controller profile. |
 
 Policy identity is never client authority. In the preview profile, Envoy
@@ -749,6 +752,15 @@ independently. `closed` blocks when TSZ cannot safely process the relevant
 stage; `open` permits the original traffic and must be an explicit risk
 decision. A guardrail-engine error is never treated as a positive safety
 finding.
+
+An Envoy-native local reply can reach `ext_proc` without a preceding request
+callback. There is then no immutable policy snapshot from which to read a
+per-policy response failure mode. On Envoy Gateway v1.8.3 this response-only
+case uses global `TSZ_FAIL_MODE` instead: the default `closed` returns the safe
+response-stage `403`, while `open` explicitly continues the original reply.
+The event is observable through
+`tsz_extproc_response_without_request_state_total{outcome=fail_closed|fail_open}`
+and a safe degraded audit record (`reason=response_without_request_state`).
 
 The size limit is deterministic rather than a fail-open/fail-closed decision:
 
@@ -777,8 +789,17 @@ TSZ publishes the following dynamic metadata under `io.thyris.tsz`:
 `request_id`, `rid`, `policy_id`, `policy_version`, `adapter`, `stage`,
 `action`, `categories`, `detection_count`, and `processor_latency_ms`.
 It never contains message content, detected values, prompts, credentials or
-validator output. Authentication failures (`401`) and rate limits (`429`) are
-returned by Envoy policies, not by TSZ guardrail actions.
+validator output. In the Bring Your Gateway Envoy integration, RID and action
+are intentionally published through this Envoy dynamic metadata and the TSZ
+audit event; they are **not** emitted as client-facing `X-TSZ-RID` or
+`X-TSZ-Action` response headers. Configure Envoy access logs or telemetry to
+consume `io.thyris.tsz` when correlating a client-visible response with TSZ
+enforcement.
+
+Authentication failures and rate-limit responses originate in Envoy policies.
+If TSZ receives such a response without safely processable policy state or
+content, its documented failure-mode behavior can replace it with a safe TSZ
+response.
 
 ---
 

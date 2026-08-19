@@ -31,6 +31,8 @@ type streamState struct {
 	requestFailureMode  policy.FailureMode
 	responseFailureMode policy.FailureMode
 	protocol            *envoyStreamState
+	responseOnlyAction  Action
+	responseOnlyHandled bool
 }
 
 func newStreamState() *streamState {
@@ -41,15 +43,26 @@ func newStreamState() *streamState {
 // decisions to the injected gateway-neutral Processor.
 type Server struct {
 	extprocv3.UnimplementedExternalProcessorServer
-	processor          Processor
-	policyCache        PolicyCache
-	policyResolver     PolicyResolver
-	auditor            guardrails.Auditor
-	streamPermit       chan struct{}
-	defaultFailureMode policy.FailureMode
-	maxBodyBytes       int64
-	processingTimeout  time.Duration
+	processor             Processor
+	policyCache           PolicyCache
+	policyResolver        PolicyResolver
+	auditor               guardrails.Auditor
+	streamPermit          chan struct{}
+	defaultFailureMode    policy.FailureMode
+	maxBodyBytes          int64
+	processingTimeout     time.Duration
+	responseStateObserver ResponseStateObserver
 }
+
+// ResponseStateObserver records a bounded operational outcome without
+// receiving any request or response content.
+type ResponseStateObserver interface {
+	ObserveResponseWithoutRequestState(outcome string)
+}
+
+type noopResponseStateObserver struct{}
+
+func (noopResponseStateObserver) ObserveResponseWithoutRequestState(string) {}
 
 // Register binds this Envoy-specific adapter to a generic gRPC server.
 func (s *Server) Register(server *grpc.Server) {
@@ -57,9 +70,10 @@ func (s *Server) Register(server *grpc.Server) {
 }
 
 type ServerSettings struct {
-	FailMode          policy.FailureMode
-	MaxBodyBytes      int64
-	ProcessingTimeout time.Duration
+	FailMode              policy.FailureMode
+	MaxBodyBytes          int64
+	ProcessingTimeout     time.Duration
+	ResponseStateObserver ResponseStateObserver
 }
 
 func defaultServerSettings() ServerSettings {
@@ -119,6 +133,9 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 	if settings.ProcessingTimeout <= 0 {
 		settings.ProcessingTimeout = defaults.ProcessingTimeout
 	}
+	if settings.ResponseStateObserver == nil {
+		settings.ResponseStateObserver = noopResponseStateObserver{}
+	}
 	return &Server{
 		processor:          processor,
 		policyCache:        policyCache,
@@ -126,6 +143,7 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 		auditor:            auditor,
 		streamPermit:       make(chan struct{}, limit),
 		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, processingTimeout: settings.ProcessingTimeout,
+		responseStateObserver: settings.ResponseStateObserver,
 	}, nil
 }
 
@@ -155,6 +173,22 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		request, kind, err := requestFromEnvoy(message, state.protocol)
 		if err != nil {
 			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		if state.protocol.isResponseOnly() {
+			result, terminal := s.responseOnlyResult(ctx, state, request)
+			response, err := responseToEnvoy(kind, request.Stage, result)
+			if err != nil {
+				return status.Error(codes.Internal, fmt.Sprintf("adapt response-only %s response: %v", kind, err))
+			}
+			if !message.GetObservabilityMode() {
+				if err := stream.Send(response); err != nil {
+					return err
+				}
+			}
+			if terminal {
+				return nil
+			}
+			continue
 		}
 		if kind == envoyRequestHeaders {
 			resolved, err := s.policyResolver.ResolvePolicy(PolicyResolutionInput{
@@ -256,6 +290,41 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	}
 }
 
+// responseOnlyResult handles the exceptional case where Envoy invokes
+// ext_proc only for response processing. No request-side policy snapshot is
+// available, so this cannot use a policy-specific response failure mode or
+// safely infer that the reply is gateway-owned. It therefore uses the global
+// TSZ_FAIL_MODE fallback and records a degraded operational signal.
+func (s *Server) responseOnlyResult(ctx context.Context, state *streamState, request ProcessingRequest) (ProcessingResult, bool) {
+	if !state.responseOnlyHandled {
+		state.responseOnlyHandled = true
+		result := s.failureResult(ProcessingRequest{Stage: StageResponse, FailureMode: s.defaultFailureMode})
+		state.responseOnlyAction = result.Action
+		outcome := "fail_closed"
+		if result.Action != ActionBlock {
+			outcome = "fail_open"
+		}
+		s.responseStateObserver.ObserveResponseWithoutRequestState(outcome)
+		if err := s.auditResponseWithoutRequestState(ctx, request, result.Action, true, "response_without_request_state"); err != nil {
+			log.Printf("audit response without request state: %v", err)
+		}
+		return result, result.Action == ActionBlock
+	}
+	return ProcessingResult{Action: state.responseOnlyAction}, false
+}
+
+func (s *Server) auditResponseWithoutRequestState(ctx context.Context, request ProcessingRequest, action Action, degraded bool, reason string) error {
+	auditAction := guardrails.RuleAction(action)
+	if err := auditAction.Validate(); err != nil {
+		return err
+	}
+	return s.auditor.Audit(ctx, guardrails.AuditEvent{
+		Timestamp: time.Now().UTC(), RID: NewBYGRID(), RequestID: request.EnvoyReqID,
+		Adapter: "envoy-gateway", Target: guardrails.BuildAuditTarget("", "", ""),
+		Stage: guardrails.AuditStageResponse, Action: auditAction, Reason: reason, Degraded: degraded,
+	})
+}
+
 func auditFailureClosed(request ProcessingRequest) bool {
 	return request.FailureMode != policy.FailureModeOpen
 }
@@ -312,7 +381,11 @@ func (s *Server) failureResult(request ProcessingRequest) ProcessingResult {
 	if request.FailureMode == policy.FailureModeOpen {
 		return ProcessingResult{Action: ActionAllow, Degraded: true}
 	}
-	return ProcessingResult{Action: ActionBlock, Degraded: true}
+	result := ProcessingResult{Action: ActionBlock, Degraded: true}
+	if request.Stage == StageResponse {
+		result.ImmediateStatus = 403
+	}
+	return result
 }
 
 func exceedsDeclaredBodyLimit(headers map[string][]string, maximum int64) bool {

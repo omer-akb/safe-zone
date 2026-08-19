@@ -98,6 +98,96 @@ func TestCacheReadinessAndImmutableGet(t *testing.T) {
 	}
 }
 
+func TestCacheReadinessUsesFailureThresholdOrSnapshotStaleness(t *testing.T) {
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	repository := &cacheRepositoryStub{snapshots: []PolicySnapshot{completeActiveSnapshot("default", 1)}}
+	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	defer redisClient.Close()
+	cache, err := NewCacheWithReadiness(repository, redisClient, time.Minute, ReadinessSettings{
+		MaxStaleness:              5 * time.Minute,
+		ReconcileFailureThreshold: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewCacheWithReadiness() error = %v", err)
+	}
+	cache.now = func() time.Time { return now }
+	if err := cache.Reconcile(context.Background()); err != nil {
+		t.Fatalf("initial Reconcile() error = %v", err)
+	}
+	if !cache.Ready() {
+		t.Fatal("cache not ready after initial reconcile")
+	}
+
+	repository.mu.Lock()
+	repository.err = errors.New("PostgreSQL unavailable")
+	repository.mu.Unlock()
+	for failures := 1; failures <= 2; failures++ {
+		if err := cache.Reconcile(context.Background()); err == nil {
+			t.Fatalf("failure %d: Reconcile() error = nil", failures)
+		}
+		if !cache.Ready() {
+			t.Fatalf("cache became unready after %d consecutive failures", failures)
+		}
+	}
+	if err := cache.Reconcile(context.Background()); err == nil {
+		t.Fatal("threshold failure: Reconcile() error = nil")
+	}
+	if cache.Ready() {
+		t.Fatal("cache remained ready after three consecutive failures")
+	}
+	if got := cache.consecutiveFailures.Load(); got != 3 {
+		t.Fatalf("consecutive failures = %d, want 3", got)
+	}
+
+	repository.mu.Lock()
+	repository.err = nil
+	repository.mu.Unlock()
+	now = now.Add(time.Minute)
+	if err := cache.Reconcile(context.Background()); err != nil {
+		t.Fatalf("recovery Reconcile() error = %v", err)
+	}
+	if !cache.Ready() || cache.consecutiveFailures.Load() != 0 {
+		t.Fatalf("cache did not recover: ready=%t failures=%d", cache.Ready(), cache.consecutiveFailures.Load())
+	}
+
+	// A successful reconciliation resets both the counter and freshness age, so
+	// intermittent failures do not flap readiness.
+	repository.mu.Lock()
+	repository.err = errors.New("temporary PostgreSQL failure")
+	repository.mu.Unlock()
+	if err := cache.Reconcile(context.Background()); err == nil {
+		t.Fatal("intermittent failure: Reconcile() error = nil")
+	}
+	repository.mu.Lock()
+	repository.err = nil
+	repository.mu.Unlock()
+	now = now.Add(time.Minute)
+	if err := cache.Reconcile(context.Background()); err != nil {
+		t.Fatalf("intermittent recovery Reconcile() error = %v", err)
+	}
+	if !cache.Ready() || cache.consecutiveFailures.Load() != 0 {
+		t.Fatalf("intermittent recovery flapped readiness: ready=%t failures=%d", cache.Ready(), cache.consecutiveFailures.Load())
+	}
+
+	// Use a high threshold to isolate the independent maximum-staleness path.
+	staleCache, err := NewCacheWithReadiness(repository, redisClient, time.Minute, ReadinessSettings{
+		MaxStaleness:              5 * time.Minute,
+		ReconcileFailureThreshold: 999,
+	})
+	if err != nil {
+		t.Fatalf("NewCacheWithReadiness(stale) error = %v", err)
+	}
+	staleNow := time.Date(2026, time.August, 19, 13, 0, 0, 0, time.UTC)
+	staleCache.now = func() time.Time { return staleNow }
+	if err := staleCache.Reconcile(context.Background()); err != nil {
+		t.Fatalf("stale initial Reconcile() error = %v", err)
+	}
+	staleNow = staleNow.Add(5*time.Minute + time.Nanosecond)
+	if staleCache.Ready() {
+		t.Fatal("cache remained ready after maximum snapshot staleness")
+	}
+}
+
 func TestPolicyIdentifierPreservesTenant(t *testing.T) {
 	tenant := "tenant/a"
 	identifier := PolicyIdentifier("policy/b", &tenant)

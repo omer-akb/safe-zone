@@ -57,6 +57,10 @@ spec:
               value: "2000"
             - name: TSZ_POLICY_RECONCILE_INTERVAL
               value: 30s
+            - name: TSZ_POLICY_MAX_STALENESS
+              value: 5m
+            - name: TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD
+              value: "3"
             - name: TSZ_POLICY_RESOLUTION_MODE
               value: attribute
             - name: TSZ_GRACEFUL_SHUTDOWN_TIMEOUT

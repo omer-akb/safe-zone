@@ -89,6 +89,20 @@ func TestRequestFromEnvoyHandlesResponseStagesEmptyBodiesAndEndOfStream(t *testi
 	}
 }
 
+func TestRequestFromEnvoyAllowsResponseOnlyLocalReply(t *testing.T) {
+	state := newEnvoyStreamState()
+	request, kind, err := requestFromEnvoy(responseHeadersForAdapterTest(false), state)
+	if err != nil {
+		t.Fatalf("response headers error = %v", err)
+	}
+	if kind != envoyResponseHeaders || request.Stage != StageResponse || !state.isResponseOnly() {
+		t.Fatalf("response headers = kind %s request %+v state %+v", kind, request, state)
+	}
+	if _, kind, err = requestFromEnvoy(responseBodyForAdapterTest([]byte(`{"error":"unauthorized"}`), true), state); err != nil || kind != envoyResponseBody {
+		t.Fatalf("response body = kind %s error %v", kind, err)
+	}
+}
+
 func TestRequestFromEnvoyRejectsInvalidOrUnexpectedSequence(t *testing.T) {
 	tests := []struct {
 		name     string
