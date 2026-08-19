@@ -11,4 +11,4 @@ examples/bring-your-gateway/shared/run.sh examples/bring-your-gateway/16-respons
 examples/bring-your-gateway/shared/cleanup.sh examples/bring-your-gateway/16-response-blocking
 ```
 
-A safe request is `request.json`; the mock response contains `secret-42` only as a synthetic fixture. The expected result is HTTP 403, a safe TSZ error body, and no raw secret in the client response. The smoke test verifies that the mock received the request before TSZ blocked the response. Inspect Envoy Gateway and `tsz-ext-proc` logs or `io.thyris.tsz` metadata when troubleshooting; rerun bootstrap if pods are not ready.
+A safe request is `request.json`; the mock response contains a synthetic generic API key only as a fixture. The policy explicitly compiles the seeded `GENERIC_API_KEY` pattern, so the expected result is HTTP 403, the `TSZ_RESPONSE_GUARDRAIL_BLOCKED` error code, and no raw credential in the client response. The smoke test verifies that the mock received the request before TSZ blocked the response. Inspect Envoy Gateway and `tsz-ext-proc` logs or `io.thyris.tsz` metadata when troubleshooting; rerun bootstrap if pods are not ready.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run one request-only BYG example through a real Envoy Gateway route. The
-# request body is never printed: examples may deliberately contain synthetic
-# sensitive-looking values.
+# Run one BYG example through a real Envoy Gateway route. The request body is
+# never printed: examples may deliberately contain synthetic sensitive-looking
+# values.
 set -euo pipefail
 
 example_dir="${1:?usage: ./run.sh <example-directory>}"
@@ -95,6 +95,12 @@ spec:
             name: ${name}
 EOF
 kubectl -n "${namespace}" wait --for=condition=complete "job/${name}" --timeout=90s
+# The shared examples exercise the manual/preview attachment, whose trusted
+# policy identity is the gateway-owned X-TSZ-Policy header. Restart after
+# activation so every processor replica starts with the newly active snapshot
+# rather than racing its periodic policy-cache reconciliation.
+kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_POLICY_RESOLUTION_MODE=header
+kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
 kubectl apply -f "${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml"
 wait_for_policy_accepted envoyextensionpolicy/tsz-request-guardrail
 wait_for_policy_accepted clienttrafficpolicy/tsz-route-policy-identity
@@ -157,7 +163,7 @@ fi
 status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http_code}' \
   --header 'content-type: application/json' \
   --header 'X-TSZ-Policy: client-must-not-win' \
-  "${curl_auth_args[@]}" \
+  "${curl_auth_args[@]+"${curl_auth_args[@]}"}" \
   --data-binary "@${example_dir}/request.json" \
   "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
 [[ "${status}" == "${expected_status}" ]] || {
@@ -175,8 +181,13 @@ else
   }
 fi
 if [[ -f "${example_dir}/expect-response-mask" || -f "${example_dir}/expect-response-absent" ]]; then
-  raw_response="$(<"${example_dir}/mock-response-content")"
-  ! grep -Fq "$raw_response" "${work_dir}/response.json" || { echo "raw upstream response reached client" >&2; exit 1; }
+	raw_response="$(<"${example_dir}/mock-response-content")"
+	! grep -Fq "$raw_response" "${work_dir}/response.json" || { echo "raw upstream response reached client" >&2; exit 1; }
+fi
+if [[ -f "${example_dir}/expect-response-block" ]]; then
+	grep -Fq '"code":"TSZ_RESPONSE_GUARDRAIL_BLOCKED"' "${work_dir}/response.json" || {
+		echo "response block did not return the safe TSZ error code" >&2; exit 1;
+	}
 fi
 if [[ -f "${example_dir}/rate-limit-requests" ]]; then
   rate_limit_requests="$(<"${example_dir}/rate-limit-requests")"
@@ -186,7 +197,7 @@ if [[ -f "${example_dir}/rate-limit-requests" ]]; then
   for request_number in $(seq 2 "$((rate_limit_requests + 1))"); do
     limited_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
       --header 'content-type: application/json' --header 'X-TSZ-Policy: client-must-not-win' \
-      "${curl_auth_args[@]}" --data-binary "@${example_dir}/request.json" \
+      "${curl_auth_args[@]+"${curl_auth_args[@]}"}" --data-binary "@${example_dir}/request.json" \
       "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
     expected_limited_status=200
     if [[ "$request_number" -gt "$rate_limit_requests" ]]; then
@@ -199,10 +210,17 @@ if [[ -f "${example_dir}/rate-limit-requests" ]]; then
 fi
 after="$(curl --silent "http://127.0.0.1:${mock_port}/inspect")"
 after_sequence="$(jq -r '.sequence' <<<"${after}")"
-if [[ "${status}" == "400" || "${status}" == "403" ]]; then
-  [[ "${before_sequence}" == "${after_sequence}" ]] || {
-    echo "blocked request reached the mock upstream" >&2; exit 1;
-  }
+if [[ -f "${example_dir}/expect-response-block" ]]; then
+	# A response block happens after the upstream has returned a response. It
+	# must therefore reach the mock, while its raw response body must not reach
+	# the client (verified above).
+	[[ "${before_sequence}" != "${after_sequence}" ]] || {
+		echo "response block did not reach the mock upstream" >&2; exit 1;
+	}
+elif [[ "${status}" == "400" || "${status}" == "403" ]]; then
+	[[ "${before_sequence}" == "${after_sequence}" ]] || {
+		echo "blocked request reached the mock upstream" >&2; exit 1;
+	}
 fi
 if [[ "$(basename "${example_dir}")" == "02-request-masking" || -f "${example_dir}/expect-mask" ]]; then
   [[ "$(jq -r '.masked' <<<"${after}")" == "true" ]] || {
