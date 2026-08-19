@@ -36,13 +36,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # tags and history for diff & versioning
 
       - name: Setup Go
         if: ${{ github.event.inputs.product == 'thyris-sz' || github.event.inputs.product == 'tszclient-go' || github.event.inputs.product == 'tsz-cli' }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.23'
 
@@ -80,7 +80,7 @@ jobs:
 
       - name: Create GitHub Release for thyris-sz (manual notes)
         if: ${{ github.event.inputs.product == 'thyris-sz' && github.event.inputs.release_notes != '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: thyris-sz-*.zip
@@ -90,7 +90,7 @@ jobs:
 
       - name: Create GitHub Release for thyris-sz (auto-generated notes)
         if: ${{ github.event.inputs.product == 'thyris-sz' && github.event.inputs.release_notes == '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: thyris-sz-*.zip
@@ -111,7 +111,7 @@ jobs:
 
       - name: Create GitHub Release for Go SDK (manual notes)
         if: ${{ github.event.inputs.product == 'tszclient-go' && github.event.inputs.release_notes != '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: tszclient-go-*.zip
@@ -121,7 +121,7 @@ jobs:
 
       - name: Create GitHub Release for Go SDK (no notes)
         if: ${{ github.event.inputs.product == 'tszclient-go' && github.event.inputs.release_notes == '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: tszclient-go-*.zip
@@ -141,7 +141,7 @@ jobs:
 
       - name: Create GitHub Release for Python SDK (manual notes)
         if: ${{ github.event.inputs.product == 'tszclient-py' && github.event.inputs.release_notes != '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: tszclient-py-*.zip
@@ -151,7 +151,7 @@ jobs:
 
       - name: Create GitHub Release for Python SDK (no notes)
         if: ${{ github.event.inputs.product == 'tszclient-py' && github.event.inputs.release_notes == '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: tszclient-py-*.zip
@@ -194,7 +194,7 @@ jobs:
           
       - name: Create GitHub Release for TSZ CLI (manual notes)
         if: ${{ github.event.inputs.product == 'tsz-cli' && github.event.inputs.release_notes != '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: |
@@ -209,7 +209,7 @@ jobs:
 
       - name: Create GitHub Release for TSZ CLI (no notes)
         if: ${{ github.event.inputs.product == 'tsz-cli' && github.event.inputs.release_notes == '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.LAST_TAG }}
           files: |
