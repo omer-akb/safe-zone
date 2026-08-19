@@ -113,6 +113,11 @@ fi
 kubectl -n "${namespace}" set image deployment/mock-openai nginx=thyris-sz:local
 kubectl -n "${namespace}" patch deployment/mock-openai --type=strategic -p \
   '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","command":["/app/byg-mock-openai"],"volumeMounts":null}]}}}}'
+if [[ -f "${example_dir}/mock-response-content" ]]; then
+  kubectl -n "${namespace}" set env deployment/mock-openai "BYG_MOCK_RESPONSE_CONTENT=$(<"${example_dir}/mock-response-content")"
+else
+  kubectl -n "${namespace}" set env deployment/mock-openai BYG_MOCK_RESPONSE_CONTENT-
+fi
 kubectl -n "${namespace}" rollout status deployment/mock-openai --timeout=90s
 
 if [[ "$(basename "${example_dir}")" == "05-fail-open" || "$(basename "${example_dir}")" == "06-fail-closed" ]]; then
@@ -160,7 +165,7 @@ status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http
   echo "expected HTTP ${expected_status}, got ${status}" >&2
   exit 1
 }
-if [[ "${status}" == "400" ]]; then
+if [[ "${status}" == "400" || "${status}" == "403" ]]; then
   grep -Fq '"policy_id":"default"' "${work_dir}/response.json" || {
     echo "block response did not identify the route-owned default policy" >&2; exit 1;
   }
@@ -168,6 +173,10 @@ else
   grep -Fq 'chatcmpl-kind-mock' "${work_dir}/response.json" || {
     echo "unexpected mock upstream response" >&2; exit 1;
   }
+fi
+if [[ -f "${example_dir}/expect-response-mask" || -f "${example_dir}/expect-response-absent" ]]; then
+  raw_response="$(<"${example_dir}/mock-response-content")"
+  ! grep -Fq "$raw_response" "${work_dir}/response.json" || { echo "raw upstream response reached client" >&2; exit 1; }
 fi
 if [[ -f "${example_dir}/rate-limit-requests" ]]; then
   rate_limit_requests="$(<"${example_dir}/rate-limit-requests")"
@@ -190,7 +199,7 @@ if [[ -f "${example_dir}/rate-limit-requests" ]]; then
 fi
 after="$(curl --silent "http://127.0.0.1:${mock_port}/inspect")"
 after_sequence="$(jq -r '.sequence' <<<"${after}")"
-if [[ "${status}" == "400" ]]; then
+if [[ "${status}" == "400" || "${status}" == "403" ]]; then
   [[ "${before_sequence}" == "${after_sequence}" ]] || {
     echo "blocked request reached the mock upstream" >&2; exit 1;
   }
