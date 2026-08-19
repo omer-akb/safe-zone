@@ -100,7 +100,12 @@ wait_for_policy_accepted envoyextensionpolicy/tsz-request-guardrail
 wait_for_policy_accepted clienttrafficpolicy/tsz-route-policy-identity
 if [[ -f "${example_dir}/resources.yaml" ]]; then
   kubectl apply -f "${example_dir}/resources.yaml"
+fi
+if [[ -f "${example_dir}/jwt-token" ]]; then
   wait_for_policy_accepted securitypolicy/tsz-jwt-authentication
+fi
+if [[ -f "${example_dir}/rate-limit-requests" ]]; then
+  wait_for_policy_accepted backendtrafficpolicy/tsz-local-rate-limit
 fi
 
 # Replace the bootstrap's simple nginx response with the safety-preserving
@@ -163,6 +168,25 @@ else
   grep -Fq 'chatcmpl-kind-mock' "${work_dir}/response.json" || {
     echo "unexpected mock upstream response" >&2; exit 1;
   }
+fi
+if [[ -f "${example_dir}/rate-limit-requests" ]]; then
+  rate_limit_requests="$(<"${example_dir}/rate-limit-requests")"
+  [[ "${rate_limit_requests}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "rate-limit-requests must be a positive integer" >&2; exit 2;
+  }
+  for request_number in $(seq 2 "$((rate_limit_requests + 1))"); do
+    limited_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+      --header 'content-type: application/json' --header 'X-TSZ-Policy: client-must-not-win' \
+      "${curl_auth_args[@]}" --data-binary "@${example_dir}/request.json" \
+      "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+    expected_limited_status=200
+    if [[ "$request_number" -gt "$rate_limit_requests" ]]; then
+      expected_limited_status=429
+    fi
+    [[ "$limited_status" == "$expected_limited_status" ]] || {
+      echo "request ${request_number} returned HTTP ${limited_status}, want ${expected_limited_status}" >&2; exit 1;
+    }
+  done
 fi
 after="$(curl --silent "http://127.0.0.1:${mock_port}/inspect")"
 after_sequence="$(jq -r '.sequence' <<<"${after}")"
