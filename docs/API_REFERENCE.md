@@ -680,6 +680,108 @@ policy via configuration.
 
 ---
 
+### 3.3 Bring Your Gateway: Envoy External Processing
+
+This integration is distinct from TSZ's built-in `/v1/chat/completions` proxy.
+Envoy remains the public gateway and owns TLS, authentication, authorization,
+routing, retries and rate limits. `tsz-ext-proc` is an internal Envoy
+`ext_proc` service that evaluates content only.
+
+The checked-in reference environment supports Envoy Gateway **v1.8.3** and
+Gateway API **v1.5.1**. Installation and profile selection are documented in
+[the Envoy Gateway integration guide](integrations/ENVOY_GATEWAY.md).
+
+#### Response contract
+
+Only buffered, non-streaming OpenAI Chat Completions traffic is enforced by
+this adapter. The request must use `Content-Type: application/json`; streaming
+requests and unsupported content shapes are processing failures, not silently
+allowed content.
+
+On the response path TSZ reads every string value at
+`choices[].message.content` where `message.role` is `assistant`. It changes
+only those values; choice order and all other JSON fields are preserved.
+
+| Policy action | Envoy result |
+| --- | --- |
+| `ALLOW` | Continue without changing the body. |
+| `AUDIT_ONLY` | Continue without changing the body. |
+| `MASK` | Replace only the unsafe assistant-content strings and update `content-length`. |
+| `BLOCK` | Replace the upstream response with a safe local `403` response. |
+
+This scope does **not** guarantee streaming response enforcement. Configure
+both request and response bodies as `Buffered`; do not attach this profile to
+a route that requires an unbuffered or SSE safety guarantee.
+
+#### Envoy attachment and runtime settings
+
+The manual attachment requires these fields:
+
+| Field | Required value | Purpose |
+| --- | --- | --- |
+| `extProc.backendRefs` | `tsz-ext-proc:9002` | Internal gRPC processor service. |
+| `messageTimeout` | e.g. `2s` | Envoy's per-message ext_proc deadline. Align it with the processor timeout. |
+| `failOpen` | `false` | Envoy must not bypass TSZ when the processor is unavailable. |
+| `processingMode.request.body` | `Buffered` | Enables request inspection and mutation. |
+| `processingMode.response.body` | `Buffered` | Enables whole-response inspection and mutation before delivery. |
+| `metadata.writableNamespaces` | `io.thyris.tsz` | Allows the processor to publish safe dynamic metadata. |
+
+`tsz-ext-proc` validates its runtime configuration on startup:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TSZ_FAIL_MODE` | `closed` | Fallback when no policy-specific failure mode is available. |
+| `TSZ_MAX_BODY_BYTES` | `1048576` | Maximum buffered request **and** response body size. |
+| `TSZ_MAX_GRPC_MESSAGE_BYTES` | `4194304` | Maximum ext_proc gRPC message size. |
+| `TSZ_PROCESSING_TIMEOUT_MS` | `2000` | TSZ processing deadline for one ext_proc message. |
+| `TSZ_MAX_CONCURRENT_STREAMS` | `100` | Maximum concurrent ext_proc streams per processor replica. |
+| `TSZ_POLICY_RESOLUTION_MODE` | `header` | `header` for the preview profile; `attribute` for the native controller profile. |
+
+Policy identity is never client authority. In the preview profile, Envoy
+overwrites `X-TSZ-Policy` before calling ext_proc. In the native profile, TSZ
+uses Envoy's trusted `xds.route_name` attribute. Do not accept a
+client-supplied policy header as an override.
+
+#### Failures, limits and safe telemetry
+
+`failure_policy.request` and `failure_policy.response` are evaluated
+independently. `closed` blocks when TSZ cannot safely process the relevant
+stage; `open` permits the original traffic and must be an explicit risk
+decision. A guardrail-engine error is never treated as a positive safety
+finding.
+
+The size limit is deterministic rather than a fail-open/fail-closed decision:
+
+- An oversized request is rejected with `413` and `TSZ_REQUEST_BODY_TOO_LARGE`.
+- An oversized upstream response is replaced with `502` and
+  `TSZ_RESPONSE_BODY_TOO_LARGE`; no upstream response content is returned.
+
+Response blocks use this intentionally small JSON shape:
+
+```json
+{
+  "error": {
+    "code": "TSZ_RESPONSE_GUARDRAIL_BLOCKED",
+    "message": "Response blocked by guardrail policy."
+  },
+  "tsz_meta": {
+    "rid": "RID-...",
+    "envoy_request_id": "...",
+    "policy_id": "...",
+    "policy_version": 1
+  }
+}
+```
+
+TSZ publishes the following dynamic metadata under `io.thyris.tsz`:
+`request_id`, `rid`, `policy_id`, `policy_version`, `adapter`, `stage`,
+`action`, `categories`, `detection_count`, and `processor_latency_ms`.
+It never contains message content, detected values, prompts, credentials or
+validator output. Authentication failures (`401`) and rate limits (`429`) are
+returned by Envoy policies, not by TSZ guardrail actions.
+
+---
+
 ## 4. Pattern Management API
 
 Patterns represent **regex‑based detection rules** for PII, secrets, or other structured signals.
