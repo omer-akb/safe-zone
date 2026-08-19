@@ -49,6 +49,39 @@ func (e *ChatRequestError) Error() string {
 
 func (e *ChatRequestError) Unwrap() error { return e.Err }
 
+type ChatResponseErrorKind string
+
+const (
+	ChatResponseEmptyBody           ChatResponseErrorKind = "empty_body"
+	ChatResponseUnsupportedType     ChatResponseErrorKind = "unsupported_content_type"
+	ChatResponseInvalidJSON         ChatResponseErrorKind = "invalid_json"
+	ChatResponseUnsupportedResponse ChatResponseErrorKind = "unsupported_response"
+	ChatResponseUnsupportedContent  ChatResponseErrorKind = "unsupported_content"
+)
+
+var (
+	ErrEmptyChatResponseBody          = errors.New("empty OpenAI chat response body")
+	ErrUnsupportedChatResponseType    = errors.New("unsupported OpenAI chat response content type")
+	ErrInvalidChatResponseJSON        = errors.New("invalid OpenAI chat response JSON")
+	ErrUnsupportedChatResponse        = errors.New("unsupported OpenAI chat response")
+	ErrUnsupportedChatResponseContent = errors.New("unsupported OpenAI chat response content")
+)
+
+type ChatResponseError struct {
+	Kind ChatResponseErrorKind
+	Path string
+	Err  error
+}
+
+func (e *ChatResponseError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("OpenAI chat response %s at %s: %v", e.Kind, e.Path, e.Err)
+	}
+	return fmt.Sprintf("OpenAI chat response %s: %v", e.Kind, e.Err)
+}
+
+func (e *ChatResponseError) Unwrap() error { return e.Err }
+
 // ChatUserContent identifies one supported mutable field in a Chat Completions
 // request. JSONPath is stable for diagnostics and does not contain content.
 type ChatUserContent struct {
@@ -72,6 +105,106 @@ type ChatContentMutation struct {
 type ChatRequest struct {
 	UserContents []ChatUserContent
 	body         []byte
+}
+
+// ChatAssistantContent identifies one supported assistant content field in a
+// non-streaming Chat Completions response. JSONPath is safe for diagnostics and
+// the source offsets allow a later masking phase to rewrite only this value.
+type ChatAssistantContent struct {
+	ChoiceIndex int
+	JSONPath    string
+	Content     string
+	valueStart  int
+	valueEnd    int
+}
+
+type ChatResponse struct {
+	AssistantContents []ChatAssistantContent
+	body              []byte
+	root              *jsonNode
+}
+
+func chatResponseError(kind ChatResponseErrorKind, path string, err error) *ChatResponseError {
+	return &ChatResponseError{
+		Kind: kind,
+		Path: path,
+		Err:  err,
+	}
+}
+
+func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
+	if !isJSONContentType(contentType) {
+		return nil, chatResponseError(
+			ChatResponseUnsupportedType,
+			"",
+			ErrUnsupportedChatResponseType,
+		)
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, chatResponseError(
+			ChatResponseEmptyBody,
+			"",
+			ErrEmptyChatResponseBody,
+		)
+	}
+
+	parser := jsonSourceParser{source: body}
+	root, err := parser.parseDocument()
+	if err != nil {
+		return nil, chatResponseError(
+			ChatResponseInvalidJSON,
+			"",
+			fmt.Errorf("%w: %v", ErrInvalidChatResponseJSON, err),
+		)
+	}
+	if root.kind != jsonObject {
+		return nil, chatResponseError(
+			ChatResponseUnsupportedResponse,
+			"",
+			ErrUnsupportedChatResponse,
+		)
+	}
+	choices := root.object["choices"]
+	if choices == nil || choices.kind != jsonArray {
+		return nil, chatResponseError(
+			ChatResponseUnsupportedResponse,
+			".choices",
+			ErrUnsupportedChatResponse,
+		)
+	}
+
+	response := &ChatResponse{
+		body: append([]byte(nil), body...),
+		root: root,
+	}
+	for index, choice := range choices.array {
+		path := fmt.Sprintf(".choices[%d].message.content", index)
+		if choice.kind != jsonObject {
+			return nil, chatResponseError(ChatResponseUnsupportedResponse, fmt.Sprintf(".choices[%d]", index), ErrUnsupportedChatResponse)
+		}
+		message := choice.object["message"]
+		if message == nil || message.kind != jsonObject {
+			return nil, chatResponseError(ChatResponseUnsupportedResponse, fmt.Sprintf(".choices[%d].message", index), ErrUnsupportedChatResponse)
+		}
+		role := message.object["role"]
+		if role == nil || role.kind != jsonString || role.stringValue != "assistant" {
+			return nil, chatResponseError(ChatResponseUnsupportedResponse, fmt.Sprintf(".choices[%d].message.role", index), ErrUnsupportedChatResponse)
+		}
+		content := message.object["content"]
+		if content == nil || content.kind != jsonString {
+			return nil, chatResponseError(ChatResponseUnsupportedContent, path, ErrUnsupportedChatResponseContent)
+		}
+		response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+			ChoiceIndex: index,
+			JSONPath:    path,
+			Content:     content.stringValue,
+			valueStart:  content.start,
+			valueEnd:    content.end,
+		})
+	}
+
+	return response, nil
 }
 
 // ParseChatRequest accepts only an application/json OpenAI Chat Completions

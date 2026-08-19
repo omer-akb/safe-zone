@@ -6,6 +6,69 @@ import (
 	"testing"
 )
 
+func TestParseChatResponseAcceptsChatCompletionsShape(t *testing.T) {
+	body := []byte(`{"id":"chatcmpl-test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"},{"index":1,"message":{"role":"assistant","content":"second answer"},"finish_reason":"length"}],"usage":{"total_tokens":7}}`)
+	response, err := ParseChatResponse("application/json; charset=utf-8", body)
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	if response.root == nil || response.root.kind != jsonObject {
+		t.Fatalf("response root = %+v, want JSON object", response.root)
+	}
+	if len(response.AssistantContents) != 2 {
+		t.Fatalf("assistant contents = %+v, want two entries", response.AssistantContents)
+	}
+	first, second := response.AssistantContents[0], response.AssistantContents[1]
+	if first.ChoiceIndex != 0 || first.JSONPath != ".choices[0].message.content" || first.Content != "hello" {
+		t.Fatalf("first assistant content = %+v", first)
+	}
+	if second.ChoiceIndex != 1 || second.JSONPath != ".choices[1].message.content" || second.Content != "second answer" {
+		t.Fatalf("second assistant content = %+v", second)
+	}
+	if string(response.body) != string(body) {
+		t.Fatalf("response body = %q, want %q", response.body, body)
+	}
+	body[0] = '['
+	if response.body[0] != '{' {
+		t.Fatal("response must retain an independent copy of the original body")
+	}
+}
+
+func TestParseChatResponseReturnsTypedErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		ctype string
+		body  string
+		want  error
+		kind  ChatResponseErrorKind
+		path  string
+	}{
+		{name: "unsupported content type", ctype: "text/plain", body: `{}`, want: ErrUnsupportedChatResponseType, kind: ChatResponseUnsupportedType},
+		{name: "empty body", ctype: "application/json", body: " \n\t", want: ErrEmptyChatResponseBody, kind: ChatResponseEmptyBody},
+		{name: "invalid JSON", ctype: "application/json", body: `{"choices":[`, want: ErrInvalidChatResponseJSON, kind: ChatResponseInvalidJSON},
+		{name: "array root", ctype: "application/json", body: `[]`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse},
+		{name: "missing choices", ctype: "application/json", body: `{"object":"chat.completion"}`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse, path: ".choices"},
+		{name: "non-array choices", ctype: "application/json", body: `{"choices":{}}`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse, path: ".choices"},
+		{name: "non-object choice", ctype: "application/json", body: `{"choices":[null]}`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse, path: ".choices[0]"},
+		{name: "missing message", ctype: "application/json", body: `{"choices":[{}]}`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse, path: ".choices[0].message"},
+		{name: "non-assistant role", ctype: "application/json", body: `{"choices":[{"message":{"role":"tool","content":"no"}}]}`, want: ErrUnsupportedChatResponse, kind: ChatResponseUnsupportedResponse, path: ".choices[0].message.role"},
+		{name: "null content", ctype: "application/json", body: `{"choices":[{"message":{"role":"assistant","content":null}}]}`, want: ErrUnsupportedChatResponseContent, kind: ChatResponseUnsupportedContent, path: ".choices[0].message.content"},
+		{name: "array content", ctype: "application/json", body: `{"choices":[{"message":{"role":"assistant","content":[]}}]}`, want: ErrUnsupportedChatResponseContent, kind: ChatResponseUnsupportedContent, path: ".choices[0].message.content"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseChatResponse(test.ctype, []byte(test.body))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("ParseChatResponse() error = %v, want errors.Is(_, %v)", err, test.want)
+			}
+			var typed *ChatResponseError
+			if !errors.As(err, &typed) || typed.Kind != test.kind || typed.Path != test.path {
+				t.Fatalf("ParseChatResponse() typed error = %+v, want kind %q and path %q", typed, test.kind, test.path)
+			}
+		})
+	}
+}
+
 func TestParseChatRequestExtractsOnlyUserStringContent(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
