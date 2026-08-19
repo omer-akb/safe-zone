@@ -27,6 +27,32 @@ Do not set `header` for some routes and `attribute` for others in a shared
 `tsz-ext-proc` Deployment. Such a configuration can select the wrong identity
 source or cause a mandatory policy to be unresolved.
 
+## Response-only local replies
+
+Envoy Gateway can invoke `ext_proc` for a response even when an earlier native
+filter, such as JWT authentication or local rate limiting, rejected the request
+before TSZ received request headers. Such a callback has no pinned TSZ policy
+snapshot. In Envoy Gateway v1.8.3, the standard
+`BackendTrafficPolicy.responseOverride.source: Local` response filter runs
+after `ext_proc` on the response path, so it cannot provide a trustworthy
+marker to TSZ at that point.
+
+TSZ therefore handles every response-only callback through the global
+`TSZ_FAIL_MODE`: `closed` is the default and returns TSZ's safe response-stage
+`403`; `open` is an explicit availability choice that continues the original
+response. Both outcomes emit the bounded
+`tsz_extproc_response_without_request_state_total{outcome=...}` metric and a
+safe degraded response audit event with reason
+`response_without_request_state`. Do not set `open` in production merely to
+preserve JWT or rate-limit local replies; evaluate that availability trade-off
+explicitly.
+
+Likewise, if a native local reply follows a request callback but its body is
+not a supported OpenAI response shape (for example Envoy's local rate-limit
+body), the pinned response failure policy applies. Its default closed outcome
+is also TSZ's safe response-stage `403`; it is not a promise to preserve the
+original `429` body.
+
 ## Preview / portable installation
 
 Use this profile when the gateway integration is managed manually or the

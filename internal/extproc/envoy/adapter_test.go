@@ -89,6 +89,20 @@ func TestRequestFromEnvoyHandlesResponseStagesEmptyBodiesAndEndOfStream(t *testi
 	}
 }
 
+func TestRequestFromEnvoyAllowsResponseOnlyLocalReply(t *testing.T) {
+	state := newEnvoyStreamState()
+	request, kind, err := requestFromEnvoy(responseHeadersForAdapterTest(false), state)
+	if err != nil {
+		t.Fatalf("response headers error = %v", err)
+	}
+	if kind != envoyResponseHeaders || request.Stage != StageResponse || !state.isResponseOnly() {
+		t.Fatalf("response headers = kind %s request %+v state %+v", kind, request, state)
+	}
+	if _, kind, err = requestFromEnvoy(responseBodyForAdapterTest([]byte(`{"error":"unauthorized"}`), true), state); err != nil || kind != envoyResponseBody {
+		t.Fatalf("response body = kind %s error %v", kind, err)
+	}
+}
+
 func TestRequestFromEnvoyRejectsInvalidOrUnexpectedSequence(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -150,6 +164,7 @@ func TestRequestFromEnvoyRejectsLegacyPolicyMetadataSource(t *testing.T) {
 }
 
 func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
+	const rawResponseContent = "raw-secret-response-must-not-leak"
 	allow, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow})
 	if err != nil {
 		t.Fatalf("responseToEnvoy(ALLOW) error = %v", err)
@@ -204,8 +219,62 @@ func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
 	if blockHeaders["content-type"] != "application/json" || blockHeaders["content-length"] != stringLength(immediate.GetBody()) {
 		t.Fatalf("BLOCK headers = %v, body length = %d", blockHeaders, len(immediate.GetBody()))
 	}
-	if _, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionBlock}); err == nil {
-		t.Fatal("response-stage BLOCK was accepted in Phase 1")
+	responseBlocked, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{
+		Action: ActionBlock, ImmediateStatus: 403, Body: []byte(rawResponseContent),
+		Metadata: SafeMetadata{
+			RID: "rid-response", RequestID: "envoy-response", PolicyID: "policy-1", PolicyVersion: 7,
+			Adapter: "openai_chat_completions", Stage: StageResponse, Action: ActionBlock,
+			Categories: []string{"SECRET"}, DetectionCount: 1, ProcessorLatencyMS: 7,
+		},
+	})
+	if err != nil {
+		t.Fatalf("responseToEnvoy(response BLOCK) error = %v", err)
+	}
+	responseImmediate := responseBlocked.GetImmediateResponse()
+	if responseImmediate == nil || responseImmediate.GetStatus().GetCode() != typev3.StatusCode_Forbidden {
+		t.Fatalf("response BLOCK = %+v", responseBlocked)
+	}
+	if err := json.Unmarshal(responseImmediate.GetBody(), &payload); err != nil {
+		t.Fatalf("decode response block body: %v; body=%q", err, responseImmediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_GUARDRAIL_BLOCKED" || payload.Error.Message != "Response blocked by guardrail policy." {
+		t.Fatalf("response BLOCK payload = %+v", payload)
+	}
+	responseMetadata := responseBlocked.GetDynamicMetadata().GetFields()[safeMetadataNamespace].GetStructValue().GetFields()
+	if responseMetadata["stage"].GetStringValue() != string(StageResponse) ||
+		responseMetadata["action"].GetStringValue() != string(ActionBlock) ||
+		responseMetadata["policy_id"].GetStringValue() != "policy-1" ||
+		responseMetadata["policy_version"].GetNumberValue() != 7 ||
+		responseMetadata["adapter"].GetStringValue() != "openai_chat_completions" ||
+		responseMetadata["detection_count"].GetNumberValue() != 1 ||
+		responseMetadata["processor_latency_ms"].GetNumberValue() != 7 {
+		t.Fatalf("response dynamic metadata = %+v", responseMetadata)
+	}
+	if values := responseMetadata["categories"].GetListValue().GetValues(); len(values) != 1 || values[0].GetStringValue() != "SECRET" {
+		t.Fatalf("response metadata categories = %+v", responseMetadata["categories"])
+	}
+	if strings.Contains(responseBlocked.GetDynamicMetadata().String(), rawResponseContent) {
+		t.Fatalf("response dynamic metadata leaked raw response content: %s", responseBlocked.GetDynamicMetadata())
+	}
+	oversizedResponse, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{
+		Action: ActionBlock, ImmediateStatus: 502, Body: []byte(rawResponseContent),
+		Metadata: SafeMetadata{RID: "rid-oversized-response", RequestID: "envoy-oversized-response"},
+	})
+	if err != nil {
+		t.Fatalf("responseToEnvoy(oversized response) error = %v", err)
+	}
+	oversizedImmediate := oversizedResponse.GetImmediateResponse()
+	if oversizedImmediate == nil || oversizedImmediate.GetStatus().GetCode() != typev3.StatusCode_BadGateway {
+		t.Fatalf("oversized response = %+v", oversizedResponse)
+	}
+	if err := json.Unmarshal(oversizedImmediate.GetBody(), &payload); err != nil {
+		t.Fatalf("decode oversized response body: %v; body=%q", err, oversizedImmediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_BODY_TOO_LARGE" || payload.Error.Message != "Response body exceeds configured limit." {
+		t.Fatalf("oversized response payload = %+v", payload)
+	}
+	if strings.Contains(string(oversizedImmediate.GetBody()), rawResponseContent) {
+		t.Fatalf("oversized response leaked raw body: %q", oversizedImmediate.GetBody())
 	}
 
 	withMetadata, err := responseToEnvoy(envoyRequestHeaders, StageRequest, ProcessingResult{

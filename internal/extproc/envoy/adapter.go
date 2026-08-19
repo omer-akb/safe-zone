@@ -62,6 +62,7 @@ type envoyStreamState struct {
 	responseHeadersSeen bool
 	responseBodySeen    bool
 	responseEnded       bool
+	responseOnly        bool
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -90,9 +91,13 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.requestEnded = typed.RequestHeaders.GetEndOfStream()
 		return contractRequest(StageRequest, headers, nil, attributes), envoyRequestHeaders, nil
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
-		if !state.requestHeadersSeen || !state.requestEnded || state.responseHeadersSeen {
+		if state.responseHeadersSeen || (state.requestHeadersSeen && !state.requestEnded) {
 			return ProcessingRequest{}, "", errors.New("response headers require a completed request and may appear only once")
 		}
+		// A filter that runs before ext_proc can reject a request and produce an
+		// Envoy local reply. In that case Envoy may invoke ext_proc only for the
+		// response path, so there is intentionally no request-side state to pin.
+		state.responseOnly = !state.requestHeadersSeen
 		headers := headersFromEnvoy(typed.ResponseHeaders.GetHeaders())
 		state.response.headers = CloneHeaders(headers)
 		state.responseHeadersSeen = true
@@ -117,6 +122,10 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 	default:
 		return ProcessingRequest{}, "", errors.New("unsupported or empty Envoy processing request")
 	}
+}
+
+func (state *envoyStreamState) isResponseOnly() bool {
+	return state.responseOnly
 }
 
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {
@@ -157,16 +166,18 @@ func responseToEnvoy(kind envoyMessageKind, stage ProcessingStage, result Proces
 		return nil, fmt.Errorf("convert safe metadata: %w", err)
 	}
 	if result.Action == ActionBlock {
-		if stage != StageRequest {
-			return nil, errors.New("Phase 1 does not support blocking response messages")
-		}
-		body, err := safeBlockResponseBody(result.Metadata, result.ImmediateStatus)
+		body, err := safeBlockResponseBody(result.Metadata, result.ImmediateStatus, stage)
 		if err != nil {
 			return nil, fmt.Errorf("serialize safe block response: %w", err)
 		}
 		statusCode := typev3.StatusCode_BadRequest
-		if result.ImmediateStatus == 413 {
+		switch result.ImmediateStatus {
+		case 403:
+			statusCode = typev3.StatusCode_Forbidden
+		case 413:
 			statusCode = typev3.StatusCode_PayloadTooLarge
+		case 502:
+			statusCode = typev3.StatusCode_BadGateway
 		}
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_ImmediateResponse{ImmediateResponse: &extprocv3.ImmediateResponse{
@@ -202,10 +213,14 @@ func responseToEnvoy(kind envoyMessageKind, stage ProcessingStage, result Proces
 	return response, nil
 }
 
-func safeBlockResponseBody(metadata SafeMetadata, immediateStatus int) ([]byte, error) {
+func safeBlockResponseBody(metadata SafeMetadata, immediateStatus int, stage ProcessingStage) ([]byte, error) {
 	code, message := blockErrorCode, blockErrorMessage
 	if immediateStatus == 413 {
 		code, message = "TSZ_REQUEST_BODY_TOO_LARGE", "Request body exceeds configured limit."
+	} else if immediateStatus == 502 {
+		code, message = "TSZ_RESPONSE_BODY_TOO_LARGE", "Response body exceeds configured limit."
+	} else if stage == StageResponse {
+		code, message = "TSZ_RESPONSE_GUARDRAIL_BLOCKED", "Response blocked by guardrail policy."
 	}
 	return json.Marshal(blockErrorResponse{
 		Error: blockError{Code: code, Message: message},

@@ -10,11 +10,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"thyris-sz/internal/cache"
 	"thyris-sz/internal/config"
 	"thyris-sz/internal/database"
 	"thyris-sz/internal/extproc"
 	"thyris-sz/internal/extproc/envoy"
+	"thyris-sz/internal/extproc/observability"
 	"thyris-sz/internal/extproc/policy"
 	"thyris-sz/internal/guardrails"
 )
@@ -51,7 +54,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize policy repository: %v", err)
 	}
-	policyCache, err := policy.NewCache(policyRepository, cache.RDB, extProcConfig.PolicyReconcileInterval)
+	policyCache, err := policy.NewCacheWithReadiness(policyRepository, cache.RDB, extProcConfig.PolicyReconcileInterval, policy.ReadinessSettings{
+		MaxStaleness:              extProcConfig.PolicyMaxStaleness,
+		ReconcileFailureThreshold: extProcConfig.PolicyReconcileFailureThreshold,
+	})
 	if err != nil {
 		log.Fatalf("initialize policy cache: %v", err)
 	}
@@ -81,19 +87,26 @@ func main() {
 		}
 		resolver = extproc.AttributePolicyResolver{Mapping: bindings}
 	}
+	metricsRegistry := prometheus.NewRegistry()
+	responseStateMetrics, err := observability.NewResponseStateMetrics(metricsRegistry)
+	if err != nil {
+		log.Fatalf("initialize ext-proc metrics: %v", err)
+	}
 	transport, err := envoy.NewServerWithResolverAndSettings(processor, policyCache, resolver, auditor, envoy.ServerSettings{
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
-		ProcessingTimeout: extProcConfig.ProcessingTimeout,
+		ProcessingTimeout:     extProcConfig.ProcessingTimeout,
+		ResponseStateObserver: responseStateMetrics,
 	}, extProcConfig.MaxConcurrentStreams)
 	if err != nil {
 		log.Fatalf("initialize Envoy adapter: %v", err)
 	}
 
 	dependencies := extproc.Dependencies{
-		DB:          database.DB,
-		Redis:       cache.RDB,
-		PolicyCache: policyCache,
-		Registrar:   transport,
+		DB:             database.DB,
+		Redis:          cache.RDB,
+		PolicyCache:    policyCache,
+		Registrar:      transport,
+		MetricsHandler: promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}),
 	}
 	runtime, err := extproc.NewRuntime(extProcConfig, dependencies)
 	if err != nil {

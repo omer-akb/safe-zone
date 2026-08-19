@@ -36,17 +36,54 @@ type cacheState struct {
 	snapshots map[string]CompiledSnapshot
 }
 
+const (
+	defaultPolicyMaxStaleness              = 5 * time.Minute
+	defaultPolicyReconcileFailureThreshold = uint32(3)
+)
+
+// ReadinessSettings bound how long a processor may serve the last known good
+// policy cache after reconciliation stops succeeding.
+type ReadinessSettings struct {
+	MaxStaleness              time.Duration
+	ReconcileFailureThreshold uint32
+}
+
+func DefaultReadinessSettings() ReadinessSettings {
+	return ReadinessSettings{
+		MaxStaleness:              defaultPolicyMaxStaleness,
+		ReconcileFailureThreshold: defaultPolicyReconcileFailureThreshold,
+	}
+}
+
+func (settings ReadinessSettings) validate() error {
+	if settings.MaxStaleness <= 0 {
+		return errors.New("policy max staleness must be greater than zero")
+	}
+	if settings.ReconcileFailureThreshold == 0 {
+		return errors.New("policy reconcile failure threshold must be greater than zero")
+	}
+	return nil
+}
+
 type Cache struct {
-	repository        Repository
-	redis             *redis.Client
-	reconcileInterval time.Duration
-	state             atomic.Pointer[cacheState]
-	ready             atomic.Bool
-	started           atomic.Bool
-	reconcileMu       sync.Mutex
+	repository          Repository
+	redis               *redis.Client
+	reconcileInterval   time.Duration
+	readiness           ReadinessSettings
+	state               atomic.Pointer[cacheState]
+	ready               atomic.Bool
+	started             atomic.Bool
+	lastReconcileAt     atomic.Int64
+	consecutiveFailures atomic.Uint32
+	reconcileMu         sync.Mutex
+	now                 func() time.Time
 }
 
 func NewCache(repository Repository, redisClient *redis.Client, reconcileInterval time.Duration) (*Cache, error) {
+	return NewCacheWithReadiness(repository, redisClient, reconcileInterval, DefaultReadinessSettings())
+}
+
+func NewCacheWithReadiness(repository Repository, redisClient *redis.Client, reconcileInterval time.Duration, readiness ReadinessSettings) (*Cache, error) {
 	if repository == nil {
 		return nil, errors.New("policy repository is required")
 	}
@@ -56,10 +93,15 @@ func NewCache(repository Repository, redisClient *redis.Client, reconcileInterva
 	if reconcileInterval <= 0 {
 		return nil, errors.New("policy reconcile interval must be greater than zero")
 	}
+	if err := readiness.validate(); err != nil {
+		return nil, err
+	}
 	cache := &Cache{
 		repository:        repository,
 		redis:             redisClient,
 		reconcileInterval: reconcileInterval,
+		readiness:         readiness,
+		now:               time.Now,
 	}
 	cache.state.Store(&cacheState{snapshots: map[string]CompiledSnapshot{}})
 	return cache, nil
@@ -84,7 +126,14 @@ func (c *Cache) Start(ctx context.Context) error {
 }
 
 func (c *Cache) Ready() bool {
-	return c.ready.Load()
+	if !c.ready.Load() || c.consecutiveFailures.Load() >= c.readiness.ReconcileFailureThreshold {
+		return false
+	}
+	lastReconcileAt := c.lastReconcileAt.Load()
+	if lastReconcileAt == 0 {
+		return false
+	}
+	return c.now().Sub(time.Unix(0, lastReconcileAt)) <= c.readiness.MaxStaleness
 }
 
 // Get returns a deep copy. A request can retain this value for its complete
@@ -111,9 +160,17 @@ func (c *Cache) Snapshots() []CompiledSnapshot {
 
 // Reconcile atomically replaces the complete cache from PostgreSQL. Readiness
 // becomes true only after the first successful full load.
-func (c *Cache) Reconcile(ctx context.Context) error {
+func (c *Cache) Reconcile(ctx context.Context) (err error) {
 	c.reconcileMu.Lock()
 	defer c.reconcileMu.Unlock()
+	defer func() {
+		if err != nil {
+			c.consecutiveFailures.Add(1)
+			return
+		}
+		c.lastReconcileAt.Store(c.now().UTC().UnixNano())
+		c.consecutiveFailures.Store(0)
+	}()
 
 	snapshots, err := c.repository.ActiveSnapshots(ctx)
 	if err != nil {
@@ -181,7 +238,11 @@ func (c *Cache) receiveSubscription(ctx context.Context) error {
 				// reconnects and restores the subscription.
 				if message.Kind == "subscribe" {
 					if err := c.Reconcile(ctx); err != nil {
-						return fmt.Errorf("full reconciliation after Redis subscribe: %w", err)
+						// The periodic reconciler is the bounded retry path for a
+						// failed PostgreSQL load. Keeping the healthy subscription
+						// open avoids a tight reconnect loop consuming the readiness
+						// failure threshold faster than its configured interval.
+						log.Printf("[DEGRADED] full reconciliation after Redis subscribe failed; keeping subscription open: %v", err)
 					}
 				}
 			case *redis.Message:
@@ -269,6 +330,8 @@ func cloneDefinition(definition PolicyDefinition) PolicyDefinition {
 	clone.Request.CompiledRules.Validators = append([]CompiledValidator(nil), definition.Request.CompiledRules.Validators...)
 	clone.Response.CustomPatternIDs = append([]string(nil), definition.Response.CustomPatternIDs...)
 	clone.Response.CustomValidators = append([]ValidatorReference(nil), definition.Response.CustomValidators...)
+	clone.Response.CompiledRules.CustomPatterns = append([]CompiledPattern(nil), definition.Response.CompiledRules.CustomPatterns...)
+	clone.Response.CompiledRules.Validators = append([]CompiledValidator(nil), definition.Response.CompiledRules.Validators...)
 	return clone
 }
 

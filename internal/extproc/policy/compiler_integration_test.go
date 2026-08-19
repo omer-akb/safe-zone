@@ -24,6 +24,14 @@ func TestCompilerCompilesValidatedSnapshotAndLocksDefinition(t *testing.T) {
 	definition.Request.AllowlistIDs = []string{strconv.FormatInt(allowlistID, 10)}
 	definition.Request.BlocklistIDs = []string{strconv.FormatInt(blocklistID, 10)}
 	definition.Request.CustomValidators = []ValidatorReference{{ID: strconv.FormatInt(validatorID, 10), Version: 9}}
+	definition.Response = ResponsePolicy{
+		Enabled:          true,
+		PII:              ActionMask,
+		Secret:           ActionBlock,
+		UnsafeContent:    ActionAuditOnly,
+		CustomPatternIDs: []string{strconv.FormatInt(patternID, 10)},
+		CustomValidators: []ValidatorReference{{ID: strconv.FormatInt(validatorID, 10), Version: 9}},
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -68,6 +76,10 @@ func TestCompilerCompilesValidatedSnapshotAndLocksDefinition(t *testing.T) {
 		len(snapshot.Definition.Request.CompiledRules.Validators) != 1 {
 		t.Fatalf("compiled definition did not retain references and material: %+v", snapshot.Definition.Request)
 	}
+	if len(snapshot.Definition.Response.CompiledRules.CustomPatterns) != 1 ||
+		len(snapshot.Definition.Response.CompiledRules.Validators) != 1 {
+		t.Fatalf("compiled response definition did not retain references and material: %+v", snapshot.Definition.Response)
+	}
 
 	if _, err := db.ExecContext(ctx, "UPDATE policy_snapshots SET definition = '{}'::jsonb WHERE id = $1", snapshotID); err == nil {
 		t.Fatal("compiled definition update succeeded; want database trigger rejection")
@@ -87,10 +99,16 @@ func TestCompilerResolvesImmutableTemplateReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	patternID, _, _, validatorID := insertReferenceFixtures(t, db)
-	template, err := json.Marshal(TemplateDefinition{Request: TemplateRequestRules{
-		CustomPatternIDs: []string{strconv.FormatInt(patternID, 10)},
-		CustomValidators: []ValidatorReference{{ID: strconv.FormatInt(validatorID, 10), Version: 1}},
-	}})
+	template, err := json.Marshal(TemplateDefinition{
+		Request: TemplateRequestRules{
+			CustomPatternIDs: []string{strconv.FormatInt(patternID, 10)},
+			CustomValidators: []ValidatorReference{{ID: strconv.FormatInt(validatorID, 10), Version: 1}},
+		},
+		Response: TemplateResponseRules{
+			CustomPatternIDs: []string{strconv.FormatInt(patternID, 10)},
+			CustomValidators: []ValidatorReference{{ID: strconv.FormatInt(validatorID, 10), Version: 1}},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +120,7 @@ func TestCompilerResolvesImmutableTemplateReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := validPolicyDefinition()
+	definition.Response = ResponsePolicy{Enabled: true, PII: ActionMask, Secret: ActionBlock, UnsafeContent: ActionAuditOnly}
 	definition.TemplateRefs = []TemplateReference{{Name: "banking", Version: 2}}
 	ctx := context.Background()
 	snapshotID, err := repository.CreateValidated(ctx, "templated", definition)
@@ -124,6 +143,9 @@ func TestCompilerResolvesImmutableTemplateReferences(t *testing.T) {
 	}
 	if len(snapshot.Definition.Request.CompiledRules.CustomPatterns) != 1 || len(snapshot.Definition.Request.CompiledRules.Validators) != 1 {
 		t.Fatalf("template material was not compiled: %+v", snapshot.Definition.Request.CompiledRules)
+	}
+	if len(snapshot.Definition.Response.CompiledRules.CustomPatterns) != 1 || len(snapshot.Definition.Response.CompiledRules.Validators) != 1 {
+		t.Fatalf("response template material was not compiled: %+v", snapshot.Definition.Response.CompiledRules)
 	}
 }
 

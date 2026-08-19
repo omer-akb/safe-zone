@@ -27,6 +27,8 @@ spec:
           # the manual profile continues to resolve X-TSZ-Policy headers.
           attributes:
             - xds.route_name
+        response:
+          body: Buffered
       metadata:
         writableNamespaces:
           - io.thyris.tsz

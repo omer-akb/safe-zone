@@ -68,6 +68,23 @@ type recordingAuditor struct {
 	events []guardrails.AuditEvent
 }
 
+type recordingResponseStateObserver struct {
+	mu       sync.Mutex
+	outcomes []string
+}
+
+func (observer *recordingResponseStateObserver) ObserveResponseWithoutRequestState(outcome string) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.outcomes = append(observer.outcomes, outcome)
+}
+
+func (observer *recordingResponseStateObserver) snapshot() []string {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return append([]string(nil), observer.outcomes...)
+}
+
 func (auditor *recordingAuditor) Audit(_ context.Context, event guardrails.AuditEvent) error {
 	auditor.mu.Lock()
 	defer auditor.mu.Unlock()
@@ -368,6 +385,113 @@ func TestServerProcessesHeadersAndBufferedBodiesBidirectionally(t *testing.T) {
 	if got := policyCache.gets.Load(); got != 1 {
 		t.Fatalf("policy cache Get calls = %d, want 1", got)
 	}
+}
+
+func TestServerResponseWithoutRequestStateUsesFailModeAndAudits(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mode        policy.FailureMode
+		wantBlock   bool
+		wantOutcome string
+	}{
+		{name: "closed by default", mode: policy.FailureModeClosed, wantBlock: true, wantOutcome: "fail_closed"},
+		{name: "explicit open", mode: policy.FailureModeOpen, wantBlock: false, wantOutcome: "fail_open"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var processorCalls atomic.Int64
+			auditor := &recordingAuditor{}
+			observer := &recordingResponseStateObserver{}
+			server, err := NewServerWithSettings(processorFunc(func(context.Context, ProcessingRequest) (ProcessingResult, error) {
+				processorCalls.Add(1)
+				return ProcessingResult{Action: ActionAllow}, nil
+			}), newKeyedPolicyCache(map[string]int{"default": 1}), auditor, ServerSettings{FailMode: test.mode, ResponseStateObserver: observer})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			stream, err := newExternalProcessorTestClientForServer(t, server).Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			if err := stream.Send(responseHeadersForAdapterTest(false)); err != nil {
+				t.Fatalf("send unmarked response headers: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive unmarked response headers: %v", err)
+			}
+			if (response.GetImmediateResponse() != nil) != test.wantBlock {
+				t.Fatalf("unmarked response = %+v, wantBlock=%t", response, test.wantBlock)
+			}
+			if test.wantBlock && response.GetImmediateResponse().GetStatus().GetCode() != typev3.StatusCode_Forbidden {
+				t.Fatalf("closed response status = %+v", response.GetImmediateResponse())
+			}
+			if !test.wantBlock && response.GetResponseHeaders().GetResponse().GetStatus() != extprocv3.CommonResponse_CONTINUE {
+				t.Fatalf("open response = %+v", response)
+			}
+			if processorCalls.Load() != 0 {
+				t.Fatalf("unmarked response invoked processor %d times", processorCalls.Load())
+			}
+			if outcomes := observer.snapshot(); len(outcomes) != 1 || outcomes[0] != test.wantOutcome {
+				t.Fatalf("outcomes = %v", outcomes)
+			}
+			events := auditor.eventsSnapshot()
+			if len(events) != 1 || events[0].Reason != "response_without_request_state" || !events[0].Degraded || events[0].Action != guardrails.RuleAction(responseAction(test.wantBlock)) {
+				t.Fatalf("audit events = %+v", events)
+			}
+		})
+	}
+}
+
+func TestServerIgnoresResponseOnlyLookingRequestHeaderAndStillGuardsResponse(t *testing.T) {
+	const rawPII = "assistant@example.test"
+	const masked = "[REDACTED:EMAIL]"
+	var responseCalls atomic.Int64
+	client := newExternalProcessorTestClient(t, processorFunc(func(_ context.Context, request ProcessingRequest) (ProcessingResult, error) {
+		if request.Stage == StageResponse && request.Body != nil {
+			responseCalls.Add(1)
+			if got := string(request.Body); got != rawPII {
+				t.Fatalf("response body = %q, want synthetic PII", got)
+			}
+			return ProcessingResult{Action: ActionMask, Body: []byte(masked)}, nil
+		}
+		return ProcessingResult{Action: ActionAllow}, nil
+	}), newKeyedPolicyCache(map[string]int{"default": 1}))
+	stream, err := client.Process(context.Background())
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	headers := requestHeadersMessage("rid-spoof", "envoy-spoof", "default")
+	headers.GetRequestHeaders().GetHeaders().Headers = append(headers.GetRequestHeaders().GetHeaders().Headers,
+		&corev3.HeaderValue{Key: "X-TSZ-Envoy-Local-Reply", RawValue: []byte("spoofed")})
+	for _, message := range []*extprocv3.ProcessingRequest{
+		headers,
+		requestBodyForAdapterTest([]byte(`{"model":"test"}`), true),
+		responseHeadersForAdapterTest(false),
+		responseBodyForAdapterTest([]byte(rawPII), true),
+	} {
+		if err := stream.Send(message); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		response, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+		if message.GetResponseBody() != nil {
+			if got := string(response.GetResponseBody().GetResponse().GetBodyMutation().GetBody()); got != masked {
+				t.Fatalf("spoofed marker bypassed response masking: got %q", got)
+			}
+		}
+	}
+	if responseCalls.Load() != 1 {
+		t.Fatalf("response processor calls = %d, want 1", responseCalls.Load())
+	}
+}
+
+func responseAction(block bool) Action {
+	if block {
+		return ActionBlock
+	}
+	return ActionAllow
 }
 
 func TestServerMapsImmediateResponseAndMutationsFromFakeProcessor(t *testing.T) {
@@ -727,6 +851,115 @@ func TestServerFailurePolicyOverridesDeploymentDefaultAndAuditsDegradedResult(t 
 	}
 }
 
+// A request processor error is never an implicit allow.  In the absence of a
+// per-policy override, the deployment-level TSZ_FAIL_MODE is the authority.
+func TestServerRequestProcessorErrorUsesDeploymentFailMode(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		failMode  policy.FailureMode
+		wantBlock bool
+	}{
+		{name: "closed blocks", failMode: policy.FailureModeClosed, wantBlock: true},
+		{name: "open continues only when explicit", failMode: policy.FailureModeOpen, wantBlock: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			auditor := &recordingAuditor{}
+			cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1}}
+			server, err := NewServerWithSettings(processorFunc(func(context.Context, ProcessingRequest) (ProcessingResult, error) {
+				return ProcessingResult{}, errors.New("injected detector failure")
+			}), cache, auditor, ServerSettings{FailMode: test.failMode, MaxBodyBytes: 1024, ProcessingTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			client := newExternalProcessorTestClientForServer(t, server)
+			stream, err := client.Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			if err := stream.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-deployment-failure", "default", true)); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive: %v", err)
+			}
+			if (response.GetImmediateResponse() != nil) != test.wantBlock {
+				t.Fatalf("response=%+v wantBlock=%v", response, test.wantBlock)
+			}
+			if !test.wantBlock && response.GetRequestHeaders() == nil {
+				t.Fatalf("fail-open must continue request headers, got %+v", response)
+			}
+			events := auditor.eventsSnapshot()
+			wantAction := guardrails.RuleActionAllow
+			if test.wantBlock {
+				wantAction = guardrails.RuleActionBlock
+			}
+			if len(events) != 1 || !events[0].Degraded || events[0].Action != wantAction {
+				t.Fatalf("degraded audit events=%+v", events)
+			}
+		})
+	}
+}
+
+func TestServerUsesResponseFailurePolicyForResponseProcessorFailures(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		requestFailure  policy.FailureMode
+		responseFailure policy.FailureMode
+		wantBlock       bool
+	}{
+		{name: "response closed overrides request open", requestFailure: policy.FailureModeOpen, responseFailure: policy.FailureModeClosed, wantBlock: true},
+		{name: "response open overrides request closed", requestFailure: policy.FailureModeClosed, responseFailure: policy.FailureModeOpen, wantBlock: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{
+				PolicyID: "default", Version: 1,
+				Definition: policy.PolicyDefinition{FailurePolicy: policy.FailurePolicy{
+					Request: test.requestFailure, Response: test.responseFailure,
+				}},
+			}}
+			server, err := NewServerWithSettings(processorFunc(func(_ context.Context, request ProcessingRequest) (ProcessingResult, error) {
+				if request.Stage == StageResponse && request.Body != nil {
+					return ProcessingResult{}, errors.New("injected response processor failure")
+				}
+				return ProcessingResult{Action: ActionAllow}, nil
+			}), cache, nil, ServerSettings{FailMode: policy.FailureModeClosed, MaxBodyBytes: 1024, ProcessingTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			client := newExternalProcessorTestClientForServer(t, server)
+			stream, err := client.Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			for _, message := range []*extprocv3.ProcessingRequest{
+				requestHeadersMessageWithEndOfStream("ignored", "envoy-response-failure", "default", true),
+				responseHeadersForAdapterTest(false),
+			} {
+				if err := stream.Send(message); err != nil {
+					t.Fatalf("send headers: %v", err)
+				}
+				if _, err := stream.Recv(); err != nil {
+					t.Fatalf("receive headers response: %v", err)
+				}
+			}
+			if err := stream.Send(responseBodyForAdapterTest([]byte("response"), true)); err != nil {
+				t.Fatalf("send response body: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response body result: %v", err)
+			}
+			if (response.GetImmediateResponse() != nil) != test.wantBlock {
+				t.Fatalf("request=%q response=%q result=%+v wantBlock=%v", test.requestFailure, test.responseFailure, response, test.wantBlock)
+			}
+			if !test.wantBlock && response.GetResponseBody() == nil {
+				t.Fatalf("fail-open response must continue, got %+v", response)
+			}
+		})
+	}
+}
+
 func TestServerRejectsOversizeBodyWith413BeforeUpstream(t *testing.T) {
 	upstream := &mockUpstream{}
 	cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1}}
@@ -759,6 +992,89 @@ func TestServerRejectsOversizeBodyWith413BeforeUpstream(t *testing.T) {
 	}
 	if response.GetImmediateResponse().GetStatus().GetCode() != typev3.StatusCode_PayloadTooLarge || upstream.requests.Load() != 0 {
 		t.Fatalf("413 response=%+v upstream=%d", response, upstream.requests.Load())
+	}
+}
+
+func TestServerRejectsOversizeResponseBeforeProcessorOrClient(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		declared bool
+	}{
+		{name: "declared content length", declared: true},
+		{name: "buffered body without content length"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var processedResponseBody atomic.Int64
+			server, err := NewServerWithSettings(processorFunc(func(_ context.Context, request ProcessingRequest) (ProcessingResult, error) {
+				if request.Stage == StageResponse && request.Body != nil {
+					processedResponseBody.Add(1)
+				}
+				return ProcessingResult{Action: ActionAllow}, nil
+			}), snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1}}, nil, ServerSettings{FailMode: policy.FailureModeOpen, MaxBodyBytes: 4, ProcessingTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("NewServerWithSettings() error = %v", err)
+			}
+			client := newExternalProcessorTestClientForServer(t, server)
+			stream, err := client.Process(context.Background())
+			if err != nil {
+				t.Fatalf("open stream: %v", err)
+			}
+			if err := stream.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-response-limit", "default", true)); err != nil {
+				t.Fatalf("send request headers: %v", err)
+			}
+			if _, err := stream.Recv(); err != nil {
+				t.Fatalf("receive request headers: %v", err)
+			}
+			responseHeaders := responseHeadersForAdapterTest(false)
+			if test.declared {
+				responseHeaders.GetResponseHeaders().GetHeaders().Headers = append(responseHeaders.GetResponseHeaders().GetHeaders().Headers,
+					&corev3.HeaderValue{Key: "content-length", RawValue: []byte("5")},
+				)
+			}
+			if err := stream.Send(responseHeaders); err != nil {
+				t.Fatalf("send response headers: %v", err)
+			}
+			response, err := stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response headers result: %v", err)
+			}
+			if test.declared {
+				assertOversizedResponse(t, response, "response body must be rejected from content-length")
+				if processedResponseBody.Load() != 0 {
+					t.Fatalf("processor saw oversized declared response body %d times", processedResponseBody.Load())
+				}
+				return
+			}
+			if response.GetResponseHeaders() == nil {
+				t.Fatalf("response headers were not allowed: %+v", response)
+			}
+			if err := stream.Send(responseBodyForAdapterTest([]byte("12345"), true)); err != nil {
+				t.Fatalf("send response body: %v", err)
+			}
+			response, err = stream.Recv()
+			if err != nil {
+				t.Fatalf("receive response body result: %v", err)
+			}
+			assertOversizedResponse(t, response, "buffered response body must be rejected")
+			if processedResponseBody.Load() != 0 {
+				t.Fatalf("processor saw oversized buffered response body %d times", processedResponseBody.Load())
+			}
+		})
+	}
+}
+
+func assertOversizedResponse(t *testing.T, response *extprocv3.ProcessingResponse, context string) {
+	t.Helper()
+	immediate := response.GetImmediateResponse()
+	if immediate == nil || immediate.GetStatus().GetCode() != typev3.StatusCode_BadGateway {
+		t.Fatalf("%s: response=%+v", context, response)
+	}
+	var payload blockErrorResponse
+	if err := json.Unmarshal(immediate.GetBody(), &payload); err != nil {
+		t.Fatalf("%s: decode body: %v; body=%q", context, err, immediate.GetBody())
+	}
+	if payload.Error.Code != "TSZ_RESPONSE_BODY_TOO_LARGE" {
+		t.Fatalf("%s: payload=%+v", context, payload)
 	}
 }
 

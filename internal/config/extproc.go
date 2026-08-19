@@ -10,14 +10,16 @@ import (
 )
 
 const (
-	defaultExtProcHTTPPort                = 8080
-	defaultExtProcGRPCPort                = 9002
-	defaultExtProcMaxConcurrentStreams    = 100
-	defaultExtProcMaxGRPCMessageBytes     = 4 * 1024 * 1024
-	defaultExtProcMaxBodyBytes            = 1024 * 1024
-	defaultExtProcProcessingTimeoutMS     = 2000
-	defaultExtProcPolicyReconcileInterval = 30 * time.Second
-	defaultExtProcGracefulShutdownTimeout = 10 * time.Second
+	defaultExtProcHTTPPort                        = 8080
+	defaultExtProcGRPCPort                        = 9002
+	defaultExtProcMaxConcurrentStreams            = 100
+	defaultExtProcMaxGRPCMessageBytes             = 4 * 1024 * 1024
+	defaultExtProcMaxBodyBytes                    = 1024 * 1024
+	defaultExtProcProcessingTimeoutMS             = 2000
+	defaultExtProcPolicyReconcileInterval         = 30 * time.Second
+	defaultExtProcPolicyMaxStaleness              = 5 * time.Minute
+	defaultExtProcPolicyReconcileFailureThreshold = 3
+	defaultExtProcGracefulShutdownTimeout         = 10 * time.Second
 )
 
 type ExtProcFailMode string
@@ -31,15 +33,17 @@ const (
 // Durations are parsed once at startup so invalid configuration cannot reach
 // request processing.
 type ExtProcConfig struct {
-	HTTPPort                int
-	GRPCPort                int
-	FailMode                ExtProcFailMode
-	MaxConcurrentStreams    uint32
-	MaxGRPCMessageBytes     int
-	MaxBodyBytes            int64
-	ProcessingTimeout       time.Duration
-	PolicyReconcileInterval time.Duration
-	GracefulShutdownTimeout time.Duration
+	HTTPPort                        int
+	GRPCPort                        int
+	FailMode                        ExtProcFailMode
+	MaxConcurrentStreams            uint32
+	MaxGRPCMessageBytes             int
+	MaxBodyBytes                    int64
+	ProcessingTimeout               time.Duration
+	PolicyReconcileInterval         time.Duration
+	PolicyMaxStaleness              time.Duration
+	PolicyReconcileFailureThreshold uint32
+	GracefulShutdownTimeout         time.Duration
 }
 
 // LoadExtProcConfig reads and strictly validates ext-proc environment values.
@@ -98,21 +102,34 @@ func LoadExtProcConfig() (*ExtProcConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxStaleness, err := positiveDuration("TSZ_POLICY_MAX_STALENESS", defaultExtProcPolicyMaxStaleness)
+	if err != nil {
+		return nil, err
+	}
+	failureThreshold, err := positiveInt64("TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD", defaultExtProcPolicyReconcileFailureThreshold)
+	if err != nil {
+		return nil, err
+	}
+	if failureThreshold > math.MaxUint32 {
+		return nil, fmt.Errorf("TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD must be at most %d, got %d", uint64(math.MaxUint32), failureThreshold)
+	}
 	shutdownTimeout, err := positiveDuration("TSZ_GRACEFUL_SHUTDOWN_TIMEOUT", defaultExtProcGracefulShutdownTimeout)
 	if err != nil {
 		return nil, err
 	}
 
 	return &ExtProcConfig{
-		HTTPPort:                httpPort,
-		GRPCPort:                grpcPort,
-		FailMode:                failMode,
-		MaxConcurrentStreams:    uint32(maxStreams),
-		MaxGRPCMessageBytes:     maxGRPCMessageBytes,
-		MaxBodyBytes:            maxBodyBytes,
-		ProcessingTimeout:       time.Duration(processingTimeoutMS) * time.Millisecond,
-		PolicyReconcileInterval: reconcileInterval,
-		GracefulShutdownTimeout: shutdownTimeout,
+		HTTPPort:                        httpPort,
+		GRPCPort:                        grpcPort,
+		FailMode:                        failMode,
+		MaxConcurrentStreams:            uint32(maxStreams),
+		MaxGRPCMessageBytes:             maxGRPCMessageBytes,
+		MaxBodyBytes:                    maxBodyBytes,
+		ProcessingTimeout:               time.Duration(processingTimeoutMS) * time.Millisecond,
+		PolicyReconcileInterval:         reconcileInterval,
+		PolicyMaxStaleness:              maxStaleness,
+		PolicyReconcileFailureThreshold: uint32(failureThreshold),
+		GracefulShutdownTimeout:         shutdownTimeout,
 	}, nil
 }
 

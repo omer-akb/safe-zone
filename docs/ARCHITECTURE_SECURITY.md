@@ -160,6 +160,51 @@ Cache invalidation is triggered when:
 
 ---
 
+### 3.3 Bring Your Gateway: Envoy Request and Response Flow
+
+When Envoy Gateway is already the edge gateway, TSZ does not replace its
+traffic-management controls. Envoy calls the internal `tsz-ext-proc` service
+using Envoy External Processing (`ext_proc`) around the upstream request and
+response.
+
+```text
+Client (untrusted)
+  -> Envoy Gateway: TLS, authentication, authorization, rate limits and routing
+  -> tsz-ext-proc: buffered request inspection
+  -> Upstream / LLM provider
+  -> tsz-ext-proc: buffered non-streaming response inspection
+  -> Envoy Gateway
+  -> Client
+```
+
+For an allowed response, Envoy forwards the original response. For a masked
+response, TSZ changes only `choices[].message.content` strings. For a blocked
+response, Envoy returns a safe local `403` response instead of the upstream
+body. The raw upstream response may reach Envoy and the internal processor,
+but it is not released to the client before this buffered check completes.
+
+This guarantee applies only to buffered, non-streaming OpenAI Chat
+Completions responses. It is not a streaming/SSE safety guarantee.
+
+#### Trust boundaries and policy authority
+
+- The client is untrusted. Its guardrail or policy headers never select the
+  effective policy.
+- Envoy is the policy-identity authority. The preview profile overwrites
+  `X-TSZ-Policy`; the native profile supplies the trusted `xds.route_name`
+  route attribute.
+- `tsz-ext-proc` pins one compiled policy snapshot at request start and uses
+  that same version for the response stage.
+- TSZ owns content decisions (`ALLOW`, `MASK`, `BLOCK`, `AUDIT_ONLY`). Envoy
+  owns authentication, authorization, rate limits, routing and provider
+  credentials.
+
+See [Bring Your Gateway](concepts/BRING_YOUR_GATEWAY.md) for the identity
+models and [Envoy Gateway Integration](integrations/ENVOY_GATEWAY.md) for the
+installation profiles.
+
+---
+
 ## 4. Security Controls
 
 ### 4.1 Network & Deployment
@@ -213,6 +258,50 @@ Cache invalidation is triggered when:
   - No code deployment is required to change detection rules.
   - Policies can be hot‑reloaded via APIs.
 - Policy changes are applied atomically and cache is invalidated to avoid inconsistent states.
+
+### 4.6 External Processing Safety Controls
+
+- Use `Buffered` body processing in both directions. The processor enforces
+  `TSZ_MAX_BODY_BYTES` for requests and responses; oversize requests return
+  `413`, while oversize upstream responses are replaced with a safe `502`.
+- Request and response failure modes are separate. `closed` is the production
+  default and blocks when TSZ cannot process a stage; `open` is an explicit
+  availability-over-enforcement choice. A processing error is never evidence
+  that content is safe.
+- If Envoy invokes `ext_proc` only on the response path (for example after an
+  earlier JWT or local-rate-limit rejection), TSZ has no request-pinned policy
+  snapshot. Envoy Gateway v1.8.3 cannot expose a standard trusted local-reply
+  marker before `ext_proc` in that filter order. TSZ uses global
+  `TSZ_FAIL_MODE` for this degraded case: default `closed` returns a safe
+  response-stage `403`; explicit `open` continues it. The processor emits a
+  bounded metric and safe degraded audit event for observability.
+- **Current dependency/readiness behavior:** `tsz-ext-proc` loads compiled
+  snapshots from PostgreSQL once before it becomes ready, then retains that
+  last-known-good in-memory cache if PostgreSQL or Redis becomes unavailable.
+  `/readyz` intentionally does not ping those dependencies for every probe;
+  `/healthz` reports only process liveness. This prevents a short network
+  interruption from removing a processor that can still enforce an immutable
+  snapshot. Instead, it returns `503 NOT READY` when **either** of these
+  conditions holds: `TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD` consecutive full
+  reconcile failures occur (default `3`), **or** the last successful full
+  reconcile is older than `TSZ_POLICY_MAX_STALENESS` (default `5m`). Every
+  successful full reconcile resets the failure count and freshness timestamp.
+  These settings are environment-configurable. The controller deliberately
+  uses stricter dependency-ping readiness because it is a control-plane
+  reconciler; `tsz-ext-proc` is a data-plane enforcer with a safe cached-policy
+  fallback. Native route-policy resolution still queries PostgreSQL at request
+  start, so it can fail closed while the header-based preview resolver
+  continues using cached snapshots.
+- Set Envoy `failOpen: false` as well as TSZ's closed failure policy. Either
+  layer configured to bypass processing weakens the enforcement boundary.
+- Restrict the ext_proc gRPC Service with Kubernetes `NetworkPolicy` so only
+  Envoy workloads can reach it. Do not expose `tsz-ext-proc` or administration
+  endpoints publicly.
+- Use TLS or mTLS between Envoy and TSZ in production. Keep policy stores,
+  Redis and administrative APIs in separate, least-privilege network paths.
+- Emit only `io.thyris.tsz` safe metadata to Envoy logs and telemetry. Raw
+  prompts, assistant text, detected values, credentials and validator output
+  are prohibited from logs, metrics, traces, headers and dynamic metadata.
 
 ---
 

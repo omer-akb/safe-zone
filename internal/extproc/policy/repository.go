@@ -295,6 +295,11 @@ func (r *PostgresRepository) ResolveReferences(ctx context.Context, definition P
 		return PolicyDefinition{}, err
 	}
 	definition.Request.CompiledRules = compiledRules
+	responseCompiledRules, err := r.resolveResponseRules(ctx, definition.Response)
+	if err != nil {
+		return PolicyDefinition{}, err
+	}
+	definition.Response.CompiledRules = responseCompiledRules
 
 	versionAware, err := r.validatorsAreVersionAware(ctx)
 	if err != nil {
@@ -412,6 +417,42 @@ func (r *PostgresRepository) resolveRequestRules(ctx context.Context, request Re
 	return rules, nil
 }
 
+func (r *PostgresRepository) resolveResponseRules(ctx context.Context, response ResponsePolicy) (CompiledResponseRules, error) {
+	rules := CompiledResponseRules{}
+	for _, reference := range response.CustomPatternIDs {
+		id, err := parseReferenceID(reference)
+		if err != nil {
+			return CompiledResponseRules{}, err
+		}
+		var rule CompiledPattern
+		if err := r.tx.QueryRowContext(ctx, `
+			SELECT id::text, name, regex, COALESCE(category, 'PII')
+			FROM patterns WHERE id = $1 AND deleted_at IS NULL FOR KEY SHARE`, id,
+		).Scan(&rule.ID, &rule.Name, &rule.Regex, &rule.Category); err != nil {
+			return CompiledResponseRules{}, wrapReferenceError("response pattern "+reference, err)
+		}
+		rule.Action = actionForResponseCategory(response, rule.Category)
+		rules.CustomPatterns = append(rules.CustomPatterns, rule)
+	}
+	for _, reference := range response.CustomValidators {
+		id, err := parseReferenceID(reference.ID)
+		if err != nil {
+			return CompiledResponseRules{}, err
+		}
+		var rule CompiledValidator
+		if err := r.tx.QueryRowContext(ctx, `
+			SELECT id::text, name, type, COALESCE(rule, ''), COALESCE(expected_response, '')
+			FROM format_validators WHERE id = $1 AND deleted_at IS NULL FOR KEY SHARE`, id,
+		).Scan(&rule.ID, &rule.Name, &rule.Kind, &rule.Rule, &rule.ExpectedResponse); err != nil {
+			return CompiledResponseRules{}, wrapReferenceError("response validator "+reference.ID, err)
+		}
+		rule.Version = reference.Version
+		rule.Action = response.UnsafeContent
+		rules.Validators = append(rules.Validators, rule)
+	}
+	return rules, nil
+}
+
 func actionForCategory(request RequestPolicy, category string) Action {
 	switch strings.ToUpper(strings.TrimSpace(category)) {
 	case "SECRET":
@@ -420,6 +461,17 @@ func actionForCategory(request RequestPolicy, category string) Action {
 		return request.PromptInjection
 	default:
 		return request.PII
+	}
+}
+
+func actionForResponseCategory(response ResponsePolicy, category string) Action {
+	switch strings.ToUpper(strings.TrimSpace(category)) {
+	case "SECRET":
+		return response.Secret
+	case "PROMPT_INJECTION", "INJECTION", "UNSAFE_CONTENT", "UNSAFE":
+		return response.UnsafeContent
+	default:
+		return response.PII
 	}
 }
 

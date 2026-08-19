@@ -16,6 +16,8 @@ var extProcEnvKeys = []string{
 	"TSZ_MAX_BODY_BYTES",
 	"TSZ_PROCESSING_TIMEOUT_MS",
 	"TSZ_POLICY_RECONCILE_INTERVAL",
+	"TSZ_POLICY_MAX_STALENESS",
+	"TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD",
 	"TSZ_GRACEFUL_SHUTDOWN_TIMEOUT",
 }
 
@@ -48,6 +50,9 @@ func TestLoadExtProcConfigDefaults(t *testing.T) {
 	if cfg.PolicyReconcileInterval != 30*time.Second {
 		t.Fatalf("PolicyReconcileInterval = %s, want 30s", cfg.PolicyReconcileInterval)
 	}
+	if cfg.PolicyMaxStaleness != 5*time.Minute || cfg.PolicyReconcileFailureThreshold != 3 {
+		t.Fatalf("unexpected policy readiness defaults: %+v", cfg)
+	}
 	if cfg.GracefulShutdownTimeout != 10*time.Second {
 		t.Fatalf("GracefulShutdownTimeout = %s, want 10s", cfg.GracefulShutdownTimeout)
 	}
@@ -63,6 +68,8 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	t.Setenv("TSZ_MAX_BODY_BYTES", "2097152")
 	t.Setenv("TSZ_PROCESSING_TIMEOUT_MS", "750")
 	t.Setenv("TSZ_POLICY_RECONCILE_INTERVAL", "45s")
+	t.Setenv("TSZ_POLICY_MAX_STALENESS", "8m")
+	t.Setenv("TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD", "7")
 	t.Setenv("TSZ_GRACEFUL_SHUTDOWN_TIMEOUT", "15s")
 
 	cfg, err := LoadExtProcConfig()
@@ -75,7 +82,7 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	if cfg.MaxConcurrentStreams != 25 || cfg.MaxGRPCMessageBytes != 8388608 || cfg.MaxBodyBytes != 2097152 {
 		t.Fatalf("unexpected limit config: %+v", cfg)
 	}
-	if cfg.ProcessingTimeout != 750*time.Millisecond || cfg.PolicyReconcileInterval != 45*time.Second || cfg.GracefulShutdownTimeout != 15*time.Second {
+	if cfg.ProcessingTimeout != 750*time.Millisecond || cfg.PolicyReconcileInterval != 45*time.Second || cfg.PolicyMaxStaleness != 8*time.Minute || cfg.PolicyReconcileFailureThreshold != 7 || cfg.GracefulShutdownTimeout != 15*time.Second {
 		t.Fatalf("unexpected duration config: %+v", cfg)
 	}
 }
@@ -98,6 +105,9 @@ func TestLoadExtProcConfigRejectsInvalidValues(t *testing.T) {
 		{name: "negative processing timeout", key: "TSZ_PROCESSING_TIMEOUT_MS", value: "-1"},
 		{name: "zero reconcile interval", key: "TSZ_POLICY_RECONCILE_INTERVAL", value: "0s"},
 		{name: "invalid reconcile interval", key: "TSZ_POLICY_RECONCILE_INTERVAL", value: "daily"},
+		{name: "zero policy max staleness", key: "TSZ_POLICY_MAX_STALENESS", value: "0s"},
+		{name: "invalid policy max staleness", key: "TSZ_POLICY_MAX_STALENESS", value: "daily"},
+		{name: "zero reconcile failure threshold", key: "TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD", value: "0"},
 		{name: "negative shutdown timeout", key: "TSZ_GRACEFUL_SHUTDOWN_TIMEOUT", value: "-1s"},
 		{name: "empty value", key: "TSZ_MAX_BODY_BYTES", value: ""},
 	}

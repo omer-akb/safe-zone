@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 )
@@ -52,8 +53,12 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 		ContainsSyntheticEmail: strings.Contains(string(body), "demo.user@example.test"),
 	}
 	s.mu.Unlock()
+	content := os.Getenv("BYG_MOCK_RESPONSE_CONTENT")
+	if content == "" {
+		content = "safe mock response"
+	}
 	w.Header().Set("content-type", "application/json")
-	_, _ = w.Write([]byte(`{"id":"chatcmpl-kind-mock","object":"chat.completion","choices":[]}`))
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl-kind-mock", "object": "chat.completion", "choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}}}})
 }
 
 func (s *server) inspect(w http.ResponseWriter, _ *http.Request) {

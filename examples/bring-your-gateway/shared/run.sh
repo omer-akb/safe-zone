@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run one request-only BYG example through a real Envoy Gateway route. The
-# request body is never printed: examples may deliberately contain synthetic
-# sensitive-looking values.
+# Run one BYG example through a real Envoy Gateway route. The request body is
+# never printed: examples may deliberately contain synthetic sensitive-looking
+# values.
 set -euo pipefail
 
 example_dir="${1:?usage: ./run.sh <example-directory>}"
@@ -59,6 +59,16 @@ if [[ "${TSZ_BYG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
 fi
 export KUBECONFIG="${kubeconfig}"
 
+# Authentication and rate-limit examples attach route-scoped Gateway policies.
+# Remove their known test fixtures before every run so a prior interrupted
+# example cannot short-circuit a later, unrelated guardrail scenario.
+kubectl -n "${namespace}" delete securitypolicy tsz-jwt-authentication --ignore-not-found
+kubectl -n "${namespace}" delete configmap tsz-jwt-authentication --ignore-not-found
+kubectl -n "${namespace}" delete backendtrafficpolicy tsz-local-rate-limit --ignore-not-found
+# Removed in the v1.8.3 response-only fallback design; delete a stale copy
+# from an earlier run so it cannot obscure the real filter ordering.
+kubectl -n "${namespace}" delete backendtrafficpolicy tsz-native-local-reply-marker --ignore-not-found
+
 name="tsz-example-$(basename "${example_dir}")"
 name="${name//[^a-z0-9-]/-}"
 kubectl -n "${namespace}" delete job "${name}" --ignore-not-found
@@ -95,23 +105,46 @@ spec:
             name: ${name}
 EOF
 kubectl -n "${namespace}" wait --for=condition=complete "job/${name}" --timeout=90s
+# The shared examples exercise the manual/preview attachment, whose trusted
+# policy identity is the gateway-owned X-TSZ-Policy header. Restart after
+# activation so every processor replica starts with the newly active snapshot
+# rather than racing its periodic policy-cache reconciliation.
+kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_POLICY_RESOLUTION_MODE=header
+kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
 kubectl apply -f "${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml"
 wait_for_policy_accepted envoyextensionpolicy/tsz-request-guardrail
 wait_for_policy_accepted clienttrafficpolicy/tsz-route-policy-identity
+if [[ -f "${example_dir}/resources.yaml" ]]; then
+  kubectl apply -f "${example_dir}/resources.yaml"
+fi
+if [[ -f "${example_dir}/jwt-token" ]]; then
+  wait_for_policy_accepted securitypolicy/tsz-jwt-authentication
+fi
+if [[ -f "${example_dir}/rate-limit-requests" ]]; then
+  wait_for_policy_accepted backendtrafficpolicy/tsz-local-rate-limit
+fi
 
 # Replace the bootstrap's simple nginx response with the safety-preserving
 # inspection mock. The mock never retains raw request content.
 kubectl -n "${namespace}" set image deployment/mock-openai nginx=thyris-sz:local
 kubectl -n "${namespace}" patch deployment/mock-openai --type=strategic -p \
   '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","command":["/app/byg-mock-openai"],"volumeMounts":null}]}}}}'
+if [[ -f "${example_dir}/mock-response-content" ]]; then
+  kubectl -n "${namespace}" set env deployment/mock-openai "BYG_MOCK_RESPONSE_CONTENT=$(<"${example_dir}/mock-response-content")"
+else
+  kubectl -n "${namespace}" set env deployment/mock-openai BYG_MOCK_RESPONSE_CONTENT-
+fi
 kubectl -n "${namespace}" rollout status deployment/mock-openai --timeout=90s
 
 if [[ "$(basename "${example_dir}")" == "05-fail-open" || "$(basename "${example_dir}")" == "06-fail-closed" ]]; then
-  # This affects only the local example Deployment and lets the stream-pinned
-  # failure policy decide after an otherwise safe request is processed.
-  kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE=1
-  kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
+	# This affects only the local example Deployment and lets the stream-pinned
+	# failure policy decide after an otherwise safe request is processed.
+	kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE=1
+else
+	# Do not let the fail-mode fixture leak into the next example run.
+	kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_EXAMPLE_AUDIT_FAILURE-
 fi
+kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
 
 envoy_service="$(kubectl -n envoy-gateway-system get service -l "gateway.envoyproxy.io/owning-gateway-namespace=${namespace},gateway.envoyproxy.io/owning-gateway-name=echo-gateway" -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "${envoy_service}" ]] || { echo "Envoy data-plane Service not found" >&2; exit 1; }
@@ -128,9 +161,25 @@ kubectl -n "${namespace}" port-forward service/mock-openai "${mock_port}:8080" >
 mock_forward_pid=$!
 sleep 2
 before_sequence="$(curl --silent "http://127.0.0.1:${mock_port}/inspect" | jq -r '.sequence')"
+curl_auth_args=()
+if [[ -f "${example_dir}/jwt-token" ]]; then
+  unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'content-type: application/json' --data-binary "@${example_dir}/request.json" \
+    "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+  # Envoy can call ext_proc only on this JWT local-reply path. There is no
+  # policy-pinned request state, so the default global closed fallback returns
+  # TSZ's safe response-stage block rather than silently allowing it.
+  [[ "${unauthenticated_status}" == "403" ]] || { echo "missing JWT returned HTTP ${unauthenticated_status}, want 403" >&2; exit 1; }
+  invalid_token_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'content-type: application/json' --header 'authorization: Bearer invalid.jwt.token' \
+    --data-binary "@${example_dir}/request.json" "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+  [[ "${invalid_token_status}" == "403" ]] || { echo "invalid JWT returned HTTP ${invalid_token_status}, want 403" >&2; exit 1; }
+  curl_auth_args=(--header "authorization: Bearer $(<"${example_dir}/jwt-token")")
+fi
 status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http_code}' \
   --header 'content-type: application/json' \
   --header 'X-TSZ-Policy: client-must-not-win' \
+  "${curl_auth_args[@]+"${curl_auth_args[@]}"}" \
   --data-binary "@${example_dir}/request.json" \
   "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
 [[ "${status}" == "${expected_status}" ]] || {
@@ -138,7 +187,7 @@ status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http
   echo "expected HTTP ${expected_status}, got ${status}" >&2
   exit 1
 }
-if [[ "${status}" == "400" ]]; then
+if [[ "${status}" == "400" || "${status}" == "403" ]]; then
   grep -Fq '"policy_id":"default"' "${work_dir}/response.json" || {
     echo "block response did not identify the route-owned default policy" >&2; exit 1;
   }
@@ -147,14 +196,52 @@ else
     echo "unexpected mock upstream response" >&2; exit 1;
   }
 fi
+if [[ -f "${example_dir}/expect-response-mask" || -f "${example_dir}/expect-response-absent" ]]; then
+	raw_response="$(<"${example_dir}/mock-response-content")"
+	! grep -Fq "$raw_response" "${work_dir}/response.json" || { echo "raw upstream response reached client" >&2; exit 1; }
+fi
+if [[ -f "${example_dir}/expect-response-block" ]]; then
+	grep -Fq '"code":"TSZ_RESPONSE_GUARDRAIL_BLOCKED"' "${work_dir}/response.json" || {
+		echo "response block did not return the safe TSZ error code" >&2; exit 1;
+	}
+fi
+if [[ -f "${example_dir}/rate-limit-requests" ]]; then
+  rate_limit_requests="$(<"${example_dir}/rate-limit-requests")"
+  [[ "${rate_limit_requests}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "rate-limit-requests must be a positive integer" >&2; exit 2;
+  }
+  for request_number in $(seq 2 "$((rate_limit_requests + 1))"); do
+    limited_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+      --header 'content-type: application/json' --header 'X-TSZ-Policy: client-must-not-win' \
+      "${curl_auth_args[@]+"${curl_auth_args[@]}"}" --data-binary "@${example_dir}/request.json" \
+      "http://127.0.0.1:${envoy_port}/v1/chat/completions")"
+    expected_limited_status=200
+    if [[ "$request_number" -gt "$rate_limit_requests" ]]; then
+      # The Envoy local 429 body is not an OpenAI response. With the response
+      # policy's default closed mode, TSZ replaces it with its safe 403 rather
+      # than forwarding an uninspectable body.
+      expected_limited_status=403
+    fi
+    [[ "$limited_status" == "$expected_limited_status" ]] || {
+      echo "request ${request_number} returned HTTP ${limited_status}, want ${expected_limited_status}" >&2; exit 1;
+    }
+  done
+fi
 after="$(curl --silent "http://127.0.0.1:${mock_port}/inspect")"
 after_sequence="$(jq -r '.sequence' <<<"${after}")"
-if [[ "${status}" == "400" ]]; then
-  [[ "${before_sequence}" == "${after_sequence}" ]] || {
-    echo "blocked request reached the mock upstream" >&2; exit 1;
-  }
+if [[ -f "${example_dir}/expect-response-block" ]]; then
+	# A response block happens after the upstream has returned a response. It
+	# must therefore reach the mock, while its raw response body must not reach
+	# the client (verified above).
+	[[ "${before_sequence}" != "${after_sequence}" ]] || {
+		echo "response block did not reach the mock upstream" >&2; exit 1;
+	}
+elif [[ "${status}" == "400" || "${status}" == "403" ]]; then
+	[[ "${before_sequence}" == "${after_sequence}" ]] || {
+		echo "blocked request reached the mock upstream" >&2; exit 1;
+	}
 fi
-if [[ "$(basename "${example_dir}")" == "02-request-masking" ]]; then
+if [[ "$(basename "${example_dir}")" == "02-request-masking" || -f "${example_dir}/expect-mask" ]]; then
   [[ "$(jq -r '.masked' <<<"${after}")" == "true" ]] || {
     echo "mock upstream did not observe an EMAIL mask placeholder" >&2; exit 1;
   }
