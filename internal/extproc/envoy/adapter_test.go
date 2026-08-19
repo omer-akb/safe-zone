@@ -150,6 +150,7 @@ func TestRequestFromEnvoyRejectsLegacyPolicyMetadataSource(t *testing.T) {
 }
 
 func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
+	const rawResponseContent = "raw-secret-response-must-not-leak"
 	allow, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow})
 	if err != nil {
 		t.Fatalf("responseToEnvoy(ALLOW) error = %v", err)
@@ -205,8 +206,12 @@ func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
 		t.Fatalf("BLOCK headers = %v, body length = %d", blockHeaders, len(immediate.GetBody()))
 	}
 	responseBlocked, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{
-		Action: ActionBlock, ImmediateStatus: 403,
-		Metadata: SafeMetadata{RID: "rid-response", RequestID: "envoy-response", PolicyID: "policy-1", PolicyVersion: 7},
+		Action: ActionBlock, ImmediateStatus: 403, Body: []byte(rawResponseContent),
+		Metadata: SafeMetadata{
+			RID: "rid-response", RequestID: "envoy-response", PolicyID: "policy-1", PolicyVersion: 7,
+			Adapter: "openai_chat_completions", Stage: StageResponse, Action: ActionBlock,
+			Categories: []string{"SECRET"}, DetectionCount: 1, ProcessorLatencyMS: 7,
+		},
 	})
 	if err != nil {
 		t.Fatalf("responseToEnvoy(response BLOCK) error = %v", err)
@@ -220,6 +225,22 @@ func TestResponseToEnvoyMapsActionsAndMessageKinds(t *testing.T) {
 	}
 	if payload.Error.Code != "TSZ_RESPONSE_GUARDRAIL_BLOCKED" || payload.Error.Message != "Response blocked by guardrail policy." {
 		t.Fatalf("response BLOCK payload = %+v", payload)
+	}
+	responseMetadata := responseBlocked.GetDynamicMetadata().GetFields()[safeMetadataNamespace].GetStructValue().GetFields()
+	if responseMetadata["stage"].GetStringValue() != string(StageResponse) ||
+		responseMetadata["action"].GetStringValue() != string(ActionBlock) ||
+		responseMetadata["policy_id"].GetStringValue() != "policy-1" ||
+		responseMetadata["policy_version"].GetNumberValue() != 7 ||
+		responseMetadata["adapter"].GetStringValue() != "openai_chat_completions" ||
+		responseMetadata["detection_count"].GetNumberValue() != 1 ||
+		responseMetadata["processor_latency_ms"].GetNumberValue() != 7 {
+		t.Fatalf("response dynamic metadata = %+v", responseMetadata)
+	}
+	if values := responseMetadata["categories"].GetListValue().GetValues(); len(values) != 1 || values[0].GetStringValue() != "SECRET" {
+		t.Fatalf("response metadata categories = %+v", responseMetadata["categories"])
+	}
+	if strings.Contains(responseBlocked.GetDynamicMetadata().String(), rawResponseContent) {
+		t.Fatalf("response dynamic metadata leaked raw response content: %s", responseBlocked.GetDynamicMetadata())
 	}
 
 	withMetadata, err := responseToEnvoy(envoyRequestHeaders, StageRequest, ProcessingResult{
