@@ -57,6 +57,7 @@ const (
 	ChatResponseInvalidJSON         ChatResponseErrorKind = "invalid_json"
 	ChatResponseUnsupportedResponse ChatResponseErrorKind = "unsupported_response"
 	ChatResponseUnsupportedContent  ChatResponseErrorKind = "unsupported_content"
+	ChatResponseInvalidMutation     ChatResponseErrorKind = "invalid_mutation"
 )
 
 var (
@@ -65,6 +66,7 @@ var (
 	ErrInvalidChatResponseJSON        = errors.New("invalid OpenAI chat response JSON")
 	ErrUnsupportedChatResponse        = errors.New("unsupported OpenAI chat response")
 	ErrUnsupportedChatResponseContent = errors.New("unsupported OpenAI chat response content")
+	ErrInvalidChatResponseMutation    = errors.New("invalid OpenAI chat response mutation")
 )
 
 type ChatResponseError struct {
@@ -116,6 +118,14 @@ type ChatAssistantContent struct {
 	Content     string
 	valueStart  int
 	valueEnd    int
+}
+
+// ChatResponseContentMutation replaces exactly one assistant content field
+// identified by ChoiceIndex. Mutations can only target entries returned by
+// ParseChatResponse.
+type ChatResponseContentMutation struct {
+	ChoiceIndex int
+	Content     string
 }
 
 type ChatResponse struct {
@@ -205,6 +215,49 @@ func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
 	}
 
 	return response, nil
+}
+
+// Mutate serializes response-content replacements safely while retaining the
+// exact original bytes for all unknown fields, choice ordering and untouched
+// JSON values.
+func (r *ChatResponse) Mutate(mutations []ChatResponseContentMutation) ([]byte, error) {
+	if r == nil {
+		return nil, chatResponseError(ChatResponseInvalidMutation, "", ErrInvalidChatResponseMutation)
+	}
+	if len(mutations) == 0 {
+		return append([]byte(nil), r.body...), nil
+	}
+	targets := make(map[int]ChatAssistantContent, len(r.AssistantContents))
+	for _, target := range r.AssistantContents {
+		targets[target.ChoiceIndex] = target
+	}
+	replacements := make(map[int][]byte, len(mutations))
+	for _, mutation := range mutations {
+		path := fmt.Sprintf(".choices[%d].message.content", mutation.ChoiceIndex)
+		if _, exists := replacements[mutation.ChoiceIndex]; exists {
+			return nil, chatResponseError(ChatResponseInvalidMutation, path, ErrInvalidChatResponseMutation)
+		}
+		if _, found := targets[mutation.ChoiceIndex]; !found {
+			return nil, chatResponseError(ChatResponseInvalidMutation, path, ErrInvalidChatResponseMutation)
+		}
+		encoded, err := json.Marshal(mutation.Content)
+		if err != nil {
+			return nil, chatResponseError(ChatResponseInvalidMutation, path, fmt.Errorf("%w: %v", ErrInvalidChatResponseMutation, err))
+		}
+		replacements[mutation.ChoiceIndex] = encoded
+	}
+	result := make([]byte, 0, len(r.body))
+	cursor := 0
+	for _, target := range r.AssistantContents {
+		replacement, changed := replacements[target.ChoiceIndex]
+		if !changed {
+			continue
+		}
+		result = append(result, r.body[cursor:target.valueStart]...)
+		result = append(result, replacement...)
+		cursor = target.valueEnd
+	}
+	return append(result, r.body[cursor:]...), nil
 }
 
 // ParseChatRequest accepts only an application/json OpenAI Chat Completions

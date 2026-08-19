@@ -156,6 +156,14 @@ type ResponsePolicy struct {
 	UnsafeContent    Action               `json:"unsafe_content"`
 	CustomPatternIDs []string             `json:"custom_pattern_ids"`
 	CustomValidators []ValidatorReference `json:"custom_validators"`
+	// CompiledRules contains immutable rule material resolved at compile time.
+	// Response processing must not look up mutable pattern or validator rows.
+	CompiledRules CompiledResponseRules `json:"compiled_rules,omitempty"`
+}
+
+type CompiledResponseRules struct {
+	CustomPatterns []CompiledPattern   `json:"custom_patterns,omitempty"`
+	Validators     []CompiledValidator `json:"validators,omitempty"`
 }
 
 // ValidatorReference pins a validator definition to a specific immutable

@@ -69,6 +69,49 @@ func TestParseChatResponseReturnsTypedErrors(t *testing.T) {
 	}
 }
 
+func TestChatResponseMutatePreservesUnknownFieldsFormattingAndChoiceOrder(t *testing.T) {
+	body := []byte(`{ "id" : "chatcmpl-test", "unknown" : { "array" : [ 1, 2 ] }, "choices" : [ { "message" : { "role" : "assistant", "content" : "replace first" }, "finish_reason" : "stop" }, { "message" : { "role" : "assistant", "content" : "replace second" }, "extra" : true } ], "usage" : { "total_tokens" : 5 } }`)
+	response, err := ParseChatResponse("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	mutated, err := response.Mutate([]ChatResponseContentMutation{
+		{ChoiceIndex: 0, Content: "[MASKED]"},
+		{ChoiceIndex: 1, Content: ""},
+	})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"replace first"`, `"[MASKED]"`, 1)
+	want = strings.Replace(want, `"replace second"`, `""`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated body changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+	unchanged, err := response.Mutate(nil)
+	if err != nil {
+		t.Fatalf("Mutate(nil) error = %v", err)
+	}
+	if string(unchanged) != string(body) {
+		t.Fatalf("no-op mutation reformatted body\ngot:  %s\nwant: %s", unchanged, body)
+	}
+}
+
+func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
+	response, err := ParseChatResponse("application/json", []byte(`{"choices":[{"message":{"role":"assistant","content":"one"}}]}`))
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	for _, mutations := range [][]ChatResponseContentMutation{
+		{{ChoiceIndex: 2, Content: "unknown"}},
+		{{ChoiceIndex: 0, Content: "first"}, {ChoiceIndex: 0, Content: "second"}},
+	} {
+		_, err := response.Mutate(mutations)
+		if !errors.Is(err, ErrInvalidChatResponseMutation) {
+			t.Fatalf("Mutate(%+v) error = %v, want ErrInvalidChatResponseMutation", mutations, err)
+		}
+	}
+}
+
 func TestParseChatRequestExtractsOnlyUserStringContent(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",

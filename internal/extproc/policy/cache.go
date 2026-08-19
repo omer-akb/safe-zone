@@ -269,6 +269,8 @@ func cloneDefinition(definition PolicyDefinition) PolicyDefinition {
 	clone.Request.CompiledRules.Validators = append([]CompiledValidator(nil), definition.Request.CompiledRules.Validators...)
 	clone.Response.CustomPatternIDs = append([]string(nil), definition.Response.CustomPatternIDs...)
 	clone.Response.CustomValidators = append([]ValidatorReference(nil), definition.Response.CustomValidators...)
+	clone.Response.CompiledRules.CustomPatterns = append([]CompiledPattern(nil), definition.Response.CompiledRules.CustomPatterns...)
+	clone.Response.CompiledRules.Validators = append([]CompiledValidator(nil), definition.Response.CompiledRules.Validators...)
 	return clone
 }
 
