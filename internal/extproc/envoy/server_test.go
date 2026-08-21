@@ -387,6 +387,42 @@ func TestServerProcessesHeadersAndBufferedBodiesBidirectionally(t *testing.T) {
 	}
 }
 
+func TestServerParsesStreamedSSEBodiesWithoutInvokingResponseEnforcement(t *testing.T) {
+	processor := &recordingProcessor{}
+	policyCache := &versionedPolicyCache{}
+	policyCache.version.Store(1)
+	stream, err := newExternalProcessorTestClient(t, processor, policyCache).Process(context.Background())
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	responseHeaders := responseHeadersForAdapterTest(false)
+	responseHeaders.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+	messages := []*extprocv3.ProcessingRequest{
+		requestHeadersMessage("rid-stream", "envoy-stream", "default"),
+		requestBodyForAdapterTest(nil, true),
+		responseHeaders,
+		responseBodyForAdapterTest([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel"), false),
+		responseBodyForAdapterTest([]byte("lo\"}}]}\n\ndata: [DONE]\n\n"), true),
+	}
+	if err := exchangeMessages(stream, messages, 0); err != nil {
+		t.Fatalf("exchangeMessages() error = %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend() error = %v", err)
+	}
+
+	processor.mu.Lock()
+	defer processor.mu.Unlock()
+	if len(processor.requests) != 3 {
+		t.Fatalf("processor received %d requests, want headers, request body and response headers only", len(processor.requests))
+	}
+	for _, request := range processor.requests {
+		if request.Stage == StageResponse && request.Body != nil {
+			t.Fatalf("streamed response body reached non-streaming processor: %+v", request)
+		}
+	}
+}
+
 func TestServerResponseWithoutRequestStateUsesFailModeAndAudits(t *testing.T) {
 	for _, test := range []struct {
 		name        string

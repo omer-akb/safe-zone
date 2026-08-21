@@ -89,6 +89,55 @@ func TestRequestFromEnvoyHandlesResponseStagesEmptyBodiesAndEndOfStream(t *testi
 	}
 }
 
+func TestRequestFromEnvoyParsesChunkedSSEResponseWithoutRunningGuardrails(t *testing.T) {
+	state := newEnvoyStreamState()
+	if _, _, err := requestFromEnvoy(requestHeadersForAdapterTest(false), state); err != nil {
+		t.Fatalf("request headers: %v", err)
+	}
+	if _, _, err := requestFromEnvoy(requestBodyForAdapterTest(nil, true), state); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	headers := responseHeadersForAdapterTest(false)
+	headers.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+	if _, _, err := requestFromEnvoy(headers, state); err != nil {
+		t.Fatalf("response headers: %v", err)
+	}
+	for _, body := range []*extprocv3.ProcessingRequest{
+		responseBodyForAdapterTest([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel"), false),
+		responseBodyForAdapterTest([]byte("lo\"}}]}\n\ndata: [DONE]\n\n"), true),
+	} {
+		if _, kind, err := requestFromEnvoy(body, state); err != nil || kind != envoyResponseBody {
+			t.Fatalf("response body kind=%s error=%v", kind, err)
+		}
+	}
+	if !state.isStreamingResponse() || !state.responseEnded {
+		t.Fatalf("streaming state = %+v", state)
+	}
+}
+
+func TestRequestFromEnvoyRejectsInvalidOrIncompleteSSE(t *testing.T) {
+	for _, body := range [][]byte{
+		[]byte("data: {not-json}\n\n"),
+		[]byte("data: {\"choices\":[]}"),
+	} {
+		state := newEnvoyStreamState()
+		if _, _, err := requestFromEnvoy(requestHeadersForAdapterTest(false), state); err != nil {
+			t.Fatalf("request headers: %v", err)
+		}
+		if _, _, err := requestFromEnvoy(requestBodyForAdapterTest(nil, true), state); err != nil {
+			t.Fatalf("request body: %v", err)
+		}
+		headers := responseHeadersForAdapterTest(false)
+		headers.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+		if _, _, err := requestFromEnvoy(headers, state); err != nil {
+			t.Fatalf("response headers: %v", err)
+		}
+		if _, _, err := requestFromEnvoy(responseBodyForAdapterTest(body, true), state); err == nil {
+			t.Fatalf("response body %q unexpectedly succeeded", body)
+		}
+	}
+}
+
 func TestRequestFromEnvoyAllowsResponseOnlyLocalReply(t *testing.T) {
 	state := newEnvoyStreamState()
 	request, kind, err := requestFromEnvoy(responseHeadersForAdapterTest(false), state)

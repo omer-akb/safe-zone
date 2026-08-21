@@ -223,6 +223,21 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			}
 			return nil
 		}
+		// Phase 4 currently adapts and validates SSE framing only. Streamed
+		// response content must not enter the non-streaming response processor;
+		// async audit, windowed enforcement and halt behavior are separate work.
+		if kind == envoyResponseBody && state.protocol.isStreamingResponse() {
+			response, adaptErr := responseToEnvoy(kind, request.Stage, ProcessingResult{Action: ActionAllow})
+			if adaptErr != nil {
+				return status.Error(codes.Internal, adaptErr.Error())
+			}
+			if !message.GetObservabilityMode() {
+				if err := stream.Send(response); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		if kind == envoyRequestHeaders && (!state.hasPolicySnapshot || state.policySnapshot.Version <= 0) {
 			result := s.failureResult(request)
 			if result.Action != ActionBlock {

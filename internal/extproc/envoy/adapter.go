@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"sort"
 	"strings"
 
@@ -63,6 +64,8 @@ type envoyStreamState struct {
 	responseBodySeen    bool
 	responseEnded       bool
 	responseOnly        bool
+	responseStreaming   bool
+	responseSSE         *OpenAISSEParser
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -102,6 +105,10 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.response.headers = CloneHeaders(headers)
 		state.responseHeadersSeen = true
 		state.responseEnded = typed.ResponseHeaders.GetEndOfStream()
+		state.responseStreaming = isSSEContentType(FirstHeader(headers, "content-type"))
+		if state.responseStreaming {
+			state.responseSSE = &OpenAISSEParser{}
+		}
 		return contractRequest(StageResponse, headers, nil, attributes), envoyResponseHeaders, nil
 	case *extprocv3.ProcessingRequest_RequestBody:
 		if !state.requestHeadersSeen || state.requestEnded || state.requestBodySeen {
@@ -111,11 +118,21 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.requestEnded = typed.RequestBody.GetEndOfStream()
 		return contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes), envoyRequestBody, nil
 	case *extprocv3.ProcessingRequest_ResponseBody:
-		if !state.responseHeadersSeen || state.responseEnded || state.responseBodySeen {
-			return ProcessingRequest{}, "", errors.New("response body requires response headers and may appear only once before end of stream")
+		if !state.responseHeadersSeen || state.responseEnded || (state.responseBodySeen && !state.responseStreaming) {
+			return ProcessingRequest{}, "", errors.New("response body requires response headers and may appear once for buffered bodies or repeatedly for streaming bodies before end of stream")
 		}
 		state.responseBodySeen = true
 		state.responseEnded = typed.ResponseBody.GetEndOfStream()
+		if state.responseStreaming {
+			if _, err := state.responseSSE.Feed(typed.ResponseBody.GetBody()); err != nil {
+				return ProcessingRequest{}, "", fmt.Errorf("parse OpenAI SSE response: %w", err)
+			}
+			if state.responseEnded {
+				if err := state.responseSSE.Finish(); err != nil {
+					return ProcessingRequest{}, "", fmt.Errorf("finish OpenAI SSE response: %w", err)
+				}
+			}
+		}
 		return contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes), envoyResponseBody, nil
 	case *extprocv3.ProcessingRequest_RequestTrailers, *extprocv3.ProcessingRequest_ResponseTrailers:
 		return ProcessingRequest{}, "", errors.New("trailer processing is not enabled in Phase 1")
@@ -126,6 +143,15 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 
 func (state *envoyStreamState) isResponseOnly() bool {
 	return state.responseOnly
+}
+
+func (state *envoyStreamState) isStreamingResponse() bool {
+	return state.responseStreaming
+}
+
+func isSSEContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }
 
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {
