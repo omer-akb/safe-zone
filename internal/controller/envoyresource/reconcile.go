@@ -76,7 +76,7 @@ func BuildEnvoyExtensionPolicy(owner *securityv1alpha1.TSZGuardrailPolicy, targe
 				// sufficient for the native attachment lookup; the resolver falls back
 				// from a fully-qualified XDS route name to the controller's HTTPRoute
 				// identity when necessary.
-				ProcessingMode: &egv1alpha1.ExtProcProcessingMode{Request: &egv1alpha1.ProcessingModeOptions{Body: bodyMode(), Attributes: []string{"xds.route_name"}}},
+				ProcessingMode: &egv1alpha1.ExtProcProcessingMode{Request: &egv1alpha1.ProcessingModeOptions{Body: bodyMode(), Attributes: []string{"xds.route_name"}}, Response: &egv1alpha1.ProcessingModeOptions{Body: responseBodyMode(owner)}},
 				Metadata:       &egv1alpha1.ExtProcMetadata{WritableNamespaces: []string{"io.thyris.tsz"}},
 			}},
 		},
@@ -86,6 +86,14 @@ func BuildEnvoyExtensionPolicy(owner *securityv1alpha1.TSZGuardrailPolicy, targe
 func bodyMode() *egv1alpha1.ExtProcBodyProcessingMode {
 	mode := egv1alpha1.BufferedExtProcBodyProcessingMode
 	return &mode
+}
+
+func responseBodyMode(owner *securityv1alpha1.TSZGuardrailPolicy) *egv1alpha1.ExtProcBodyProcessingMode {
+	if owner != nil && owner.Spec.StreamingMode() == "Windowed" {
+		mode := egv1alpha1.StreamedExtProcBodyProcessingMode
+		return &mode
+	}
+	return bodyMode()
 }
 
 // DeterministicName is target-only by design: renaming the owning CRD cannot

@@ -578,6 +578,12 @@ func (r *PostgresRepository) transition(ctx context.Context, statement string, a
 }
 
 func ValidateDefinition(definition PolicyDefinition) error {
+	if definition.Streaming.Mode != "" && definition.Streaming.Mode != StreamingModeNone && definition.Streaming.Mode != StreamingModeWindowed {
+		return fmt.Errorf("%w: streaming mode must be None or Windowed, got %q", ErrInvalidDefinition, definition.Streaming.Mode)
+	}
+	if definition.Streaming.WindowBytes < 0 {
+		return fmt.Errorf("%w: streaming window bytes must be positive", ErrInvalidDefinition)
+	}
 	type actionCandidate struct {
 		path   string
 		action Action
@@ -609,6 +615,10 @@ func ValidateDefinition(definition PolicyDefinition) error {
 		if !candidate.action.Valid() {
 			return fmt.Errorf("%w: %s action must be ALLOW, MASK, BLOCK or AUDIT_ONLY, got %q", ErrInvalidDefinition, candidate.path, candidate.action)
 		}
+	}
+	if definition.Streaming.Mode == StreamingModeWindowed && definition.Response.Enabled &&
+		(definition.Response.PII == ActionBlock || definition.Response.Secret == ActionBlock || definition.Response.UnsafeContent == ActionBlock) {
+		return fmt.Errorf("%w: windowed streaming does not support response BLOCK actions", ErrInvalidDefinition)
 	}
 	for _, validators := range [][]ValidatorReference{definition.Request.CustomValidators, definition.Response.CustomValidators} {
 		for _, validator := range validators {

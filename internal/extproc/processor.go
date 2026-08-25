@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"thyris-sz/internal/extproc/policy"
@@ -15,6 +16,14 @@ import (
 // implement policy or guardrail decisions.
 type Processor interface {
 	Process(ctx context.Context, request ProcessingRequest) (ProcessingResult, error)
+}
+
+// StreamingWindowProcessor is implemented by processors that can evaluate a
+// complete, event-aligned OpenAI SSE window and return event-level mutations.
+// Keeping this optional preserves the gateway-neutral Processor contract for
+// adapters that do not support streaming.
+type StreamingWindowProcessor interface {
+	ProcessSSEWindow(ctx context.Context, request ProcessingRequest, events []OpenAISSEEvent) (ProcessingResult, []OpenAISSEEvent, error)
 }
 
 // AllowProcessor is the Phase 1 default. It validates the contract stage and
@@ -73,6 +82,77 @@ func (p *OpenAIRequestProcessor) Process(ctx context.Context, request Processing
 	default:
 		return ProcessingResult{}, fmt.Errorf("unsupported processing stage %q", request.Stage)
 	}
+}
+
+func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request ProcessingRequest, events []OpenAISSEEvent) (ProcessingResult, []OpenAISSEEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return ProcessingResult{}, nil, err
+	}
+	if request.PolicySnapshot == nil || !request.PolicySnapshot.Definition.Response.Enabled {
+		return ProcessingResult{Action: ActionAllow}, append([]OpenAISSEEvent(nil), events...), nil
+	}
+	rules, err := compiledResponseGuardrailRules(*request.PolicySnapshot)
+	if err != nil {
+		return ProcessingResult{}, nil, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	mutated := append([]OpenAISSEEvent(nil), events...)
+	started := time.Now()
+	// Inspect the entire event-aligned window as one text value. This is what
+	// makes the trailing, not-yet-emitted overlap effective for a pattern or
+	// PII value split across two SSE events.
+	var joined strings.Builder
+	type location struct{ event, content int }
+	locations := make([]location, 0)
+	for eventIndex, event := range events {
+		for contentIndex, content := range event.DeltaContents {
+			joined.WriteString(content)
+			locations = append(locations, location{eventIndex, contentIndex})
+		}
+	}
+	if len(locations) == 0 {
+		return result, mutated, nil
+	}
+	inspection, err := p.service.Inspect(ctx, guardrails.InspectInput{Text: joined.String(), RID: request.RID, Policy: rules})
+	if err != nil {
+		return ProcessingResult{}, nil, fmt.Errorf("inspect streaming assistant window: %w", err)
+	}
+	action, err := actionFromGuardrail(inspection.Action)
+	if err != nil {
+		return ProcessingResult{}, nil, err
+	}
+	result.Action = action
+	result.DetectionCount = inspection.DetectionCount
+	result.Metadata.Categories = append([]string(nil), inspection.Categories...)
+	sort.Strings(result.Metadata.Categories)
+	if action == ActionMask {
+		// A cross-event match cannot safely be mapped back to its individual
+		// source offsets. Emit the sanitized window content once and clear the
+		// remaining deltas, preserving the client-visible concatenated text.
+		contents := make([][]string, len(events))
+		for index, event := range events {
+			contents[index] = append([]string(nil), event.DeltaContents...)
+		}
+		contents[locations[0].event][locations[0].content] = inspection.SafeContent
+		for _, location := range locations[1:] {
+			contents[location.event][location.content] = ""
+		}
+		for eventIndex, event := range events {
+			if len(event.DeltaContents) == 0 {
+				continue
+			}
+			rewritten, rewriteErr := event.WithDeltaContents(contents[eventIndex])
+			if rewriteErr != nil {
+				return ProcessingResult{}, nil, rewriteErr
+			}
+			mutated[eventIndex] = rewritten
+		}
+	}
+	result.Metadata = SafeMetadata{RequestID: request.EnvoyReqID, RID: request.RID, PolicyID: request.PolicyID, PolicyVersion: request.PolicyVersion, Adapter: "openai_chat_completions", Stage: StageResponse, Action: result.Action, Categories: result.Metadata.Categories, DetectionCount: result.DetectionCount, ProcessorLatencyMS: time.Since(started).Milliseconds()}
+	if result.Action == ActionBlock {
+		result.ImmediateStatus = 403
+	}
+	return result, mutated, nil
 }
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {

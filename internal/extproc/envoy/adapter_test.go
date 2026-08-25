@@ -351,6 +351,19 @@ func testHeaderMap(values ...[2]string) *corev3.HeaderMap {
 	return result
 }
 
+func TestSSEWindowKeepsEventAtomicTrailingOverlap(t *testing.T) {
+	window := newSSEWindow(256, 512)
+	event := func(size int) OpenAISSEEvent { return OpenAISSEEvent{Raw: make([]byte, size)} }
+	window.add([]OpenAISSEEvent{event(300), event(300), event(300)})
+	events, emit, ready := window.next(false)
+	if !ready || emit != 1 || len(events) != 3 {
+		t.Fatalf("next() = (%d events, emit=%d, ready=%t), want 3/1/true", len(events), emit, ready)
+	}
+	if len(window.events) != 2 || window.bytes != 600 {
+		t.Fatalf("retained overlap = %d events / %d bytes, want 2 / 600", len(window.events), window.bytes)
+	}
+}
+
 // The semantic helpers keep generated Envoy message details out of individual
 // test cases.
 func requestHeadersForAdapterTest(endOfStream bool) *extprocv3.ProcessingRequest {

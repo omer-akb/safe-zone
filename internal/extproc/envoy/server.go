@@ -211,6 +211,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			state.pinPolicy(request, s.policyCache, s.defaultFailureMode)
 		}
 		state.apply(&request)
+		if kind == envoyResponseHeaders && state.hasPolicySnapshot && state.policySnapshot.Definition.Streaming.Mode == policy.StreamingModeWindowed {
+			state.protocol.enableWindowedResponse(state.policySnapshot.Definition.Streaming.WindowBytesOrDefault())
+		}
 		if immediateStatus, exceeded := bodyLimitStatus(kind, request.Headers, request.Body, s.maxBodyBytes); exceeded {
 			result := ProcessingResult{Action: ActionBlock, ImmediateStatus: immediateStatus}
 			enrichResultIdentity(&result, request, kind, 0)
@@ -223,11 +226,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			}
 			return nil
 		}
-		// Phase 4 currently adapts and validates SSE framing only. Streamed
-		// response content must not enter the non-streaming response processor;
-		// async audit, windowed enforcement and halt behavior are separate work.
 		if kind == envoyResponseBody && state.protocol.isStreamingResponse() {
-			response, adaptErr := responseToEnvoy(kind, request.Stage, ProcessingResult{Action: ActionAllow})
+			response, terminal, adaptErr := s.processWindowedResponse(ctx, state, request)
 			if adaptErr != nil {
 				return status.Error(codes.Internal, adaptErr.Error())
 			}
@@ -235,6 +235,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				if err := stream.Send(response); err != nil {
 					return err
 				}
+			}
+			if terminal {
+				return nil
 			}
 			continue
 		}
@@ -303,6 +306,39 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			return err
 		}
 	}
+}
+
+func (s *Server) processWindowedResponse(ctx context.Context, state *streamState, request ProcessingRequest) (*extprocv3.ProcessingResponse, bool, error) {
+	if state.protocol.windowedResponse == nil {
+		response, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow})
+		return response, false, err
+	}
+	events, emit, ready := state.protocol.takeWindow(request.EndOfStream)
+	if !ready {
+		response, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow, Body: []byte{}})
+		return response, false, err
+	}
+	windowProcessor, ok := s.processor.(StreamingWindowProcessor)
+	if !ok {
+		result := s.failureResult(request)
+		enrichResultIdentity(&result, request, envoyResponseBody, 0)
+		response, err := responseToEnvoy(envoyResponseBody, StageResponse, result)
+		return response, result.Action == ActionBlock, err
+	}
+	processingCtx, cancel := context.WithTimeout(ctx, s.processingTimeout)
+	result, mutated, err := windowProcessor.ProcessSSEWindow(processingCtx, request, events)
+	cancel()
+	if err != nil {
+		result = s.failureResult(request)
+	}
+	enrichResultIdentity(&result, request, envoyResponseBody, 0)
+	if result.Action == ActionBlock {
+		response, adaptErr := responseToEnvoy(envoyResponseBody, StageResponse, result)
+		return response, true, adaptErr
+	}
+	result.Body = encodeSSEEvents(mutated[:emit])
+	response, adaptErr := responseToEnvoy(envoyResponseBody, StageResponse, result)
+	return response, false, adaptErr
 }
 
 // responseOnlyResult handles the exceptional case where Envoy invokes

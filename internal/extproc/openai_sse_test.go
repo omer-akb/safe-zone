@@ -2,6 +2,7 @@ package extproc
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -23,14 +24,17 @@ func TestOpenAISSEParserExtractsDeltasAcrossExtProcBodyChunks(t *testing.T) {
 	if err := parser.Finish(); err != nil {
 		t.Fatalf("Finish() error = %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("events = %+v, want content event and DONE", events)
+	if len(events) != 3 {
+		t.Fatalf("events = %+v, want content event, keepalive, and DONE", events)
 	}
 	if got, want := events[0].DeltaContents, []string{"hello", " world"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("delta contents = %q, want %q", got, want)
 	}
-	if !events[1].Done || len(events[1].DeltaContents) != 0 {
-		t.Fatalf("DONE event = %+v", events[1])
+	if len(events[1].Raw) == 0 || events[1].Done || len(events[1].DeltaContents) != 0 {
+		t.Fatalf("keepalive event = %+v", events[1])
+	}
+	if !events[2].Done || len(events[2].DeltaContents) != 0 {
+		t.Fatalf("DONE event = %+v", events[2])
 	}
 }
 
@@ -65,4 +69,19 @@ func TestOpenAISSEParserReturnsSafeErrors(t *testing.T) {
 			t.Fatalf("Finish() error = %v, want ErrIncompleteSSEEvent", err)
 		}
 	})
+}
+
+func TestOpenAISSEEventWithDeltaContentsRewritesOnlyDelta(t *testing.T) {
+	parser := &OpenAISSEParser{}
+	events, err := parser.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"secret\"},\"index\":0}]}\n\n"))
+	if err != nil || len(events) != 1 {
+		t.Fatalf("Feed() = (%+v, %v)", events, err)
+	}
+	rewritten, err := events[0].WithDeltaContents([]string{"[MASKED]"})
+	if err != nil {
+		t.Fatalf("WithDeltaContents() error = %v", err)
+	}
+	if got := string(rewritten.Raw); !strings.Contains(got, "[MASKED]") || !strings.HasPrefix(got, "data: ") || !strings.HasSuffix(got, "\n\n") {
+		t.Fatalf("rewritten SSE = %q", got)
+	}
 }

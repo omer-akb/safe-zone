@@ -66,6 +66,8 @@ type envoyStreamState struct {
 	responseOnly        bool
 	responseStreaming   bool
 	responseSSE         *OpenAISSEParser
+	windowedResponse    *sseWindow
+	completedSSEEvents  []OpenAISSEEvent
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -92,7 +94,9 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.request.headers = CloneHeaders(headers)
 		state.requestHeadersSeen = true
 		state.requestEnded = typed.RequestHeaders.GetEndOfStream()
-		return contractRequest(StageRequest, headers, nil, attributes), envoyRequestHeaders, nil
+		request := contractRequest(StageRequest, headers, nil, attributes)
+		request.EndOfStream = typed.RequestHeaders.GetEndOfStream()
+		return request, envoyRequestHeaders, nil
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
 		if state.responseHeadersSeen || (state.requestHeadersSeen && !state.requestEnded) {
 			return ProcessingRequest{}, "", errors.New("response headers require a completed request and may appear only once")
@@ -109,14 +113,18 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		if state.responseStreaming {
 			state.responseSSE = &OpenAISSEParser{}
 		}
-		return contractRequest(StageResponse, headers, nil, attributes), envoyResponseHeaders, nil
+		request := contractRequest(StageResponse, headers, nil, attributes)
+		request.EndOfStream = typed.ResponseHeaders.GetEndOfStream()
+		return request, envoyResponseHeaders, nil
 	case *extprocv3.ProcessingRequest_RequestBody:
 		if !state.requestHeadersSeen || state.requestEnded || state.requestBodySeen {
 			return ProcessingRequest{}, "", errors.New("request body requires request headers and may appear only once before end of stream")
 		}
 		state.requestBodySeen = true
 		state.requestEnded = typed.RequestBody.GetEndOfStream()
-		return contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes), envoyRequestBody, nil
+		request := contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes)
+		request.EndOfStream = typed.RequestBody.GetEndOfStream()
+		return request, envoyRequestBody, nil
 	case *extprocv3.ProcessingRequest_ResponseBody:
 		if !state.responseHeadersSeen || state.responseEnded || (state.responseBodySeen && !state.responseStreaming) {
 			return ProcessingRequest{}, "", errors.New("response body requires response headers and may appear once for buffered bodies or repeatedly for streaming bodies before end of stream")
@@ -124,21 +132,93 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.responseBodySeen = true
 		state.responseEnded = typed.ResponseBody.GetEndOfStream()
 		if state.responseStreaming {
-			if _, err := state.responseSSE.Feed(typed.ResponseBody.GetBody()); err != nil {
+			events, err := state.responseSSE.Feed(typed.ResponseBody.GetBody())
+			if err != nil {
 				return ProcessingRequest{}, "", fmt.Errorf("parse OpenAI SSE response: %w", err)
 			}
+			state.completedSSEEvents = events
 			if state.responseEnded {
 				if err := state.responseSSE.Finish(); err != nil {
 					return ProcessingRequest{}, "", fmt.Errorf("finish OpenAI SSE response: %w", err)
 				}
 			}
 		}
-		return contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes), envoyResponseBody, nil
+		request := contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes)
+		request.EndOfStream = typed.ResponseBody.GetEndOfStream()
+		return request, envoyResponseBody, nil
 	case *extprocv3.ProcessingRequest_RequestTrailers, *extprocv3.ProcessingRequest_ResponseTrailers:
 		return ProcessingRequest{}, "", errors.New("trailer processing is not enabled in Phase 1")
 	default:
 		return ProcessingRequest{}, "", errors.New("unsupported or empty Envoy processing request")
 	}
+}
+
+func (state *envoyStreamState) enableWindowedResponse(windowBytes int) {
+	if state.responseStreaming && state.windowedResponse == nil {
+		state.windowedResponse = newSSEWindow(windowBytes, 512)
+	}
+}
+
+func (state *envoyStreamState) takeWindow(endOfStream bool) ([]OpenAISSEEvent, int, bool) {
+	if state.windowedResponse == nil {
+		return nil, 0, false
+	}
+	state.windowedResponse.add(state.completedSSEEvents)
+	state.completedSSEEvents = nil
+	return state.windowedResponse.next(endOfStream)
+}
+
+type sseWindow struct {
+	events                 []OpenAISSEEvent
+	bytes, target, overlap int
+}
+
+func newSSEWindow(target, overlap int) *sseWindow {
+	if target <= 0 {
+		target = 4096
+	}
+	return &sseWindow{target: target, overlap: overlap}
+}
+func (w *sseWindow) add(events []OpenAISSEEvent) {
+	for _, event := range events {
+		w.events = append(w.events, event)
+		w.bytes += len(event.Raw)
+	}
+}
+func (w *sseWindow) next(end bool) ([]OpenAISSEEvent, int, bool) {
+	if end {
+		events := w.events
+		w.events = nil
+		w.bytes = 0
+		return events, len(events), len(events) > 0
+	}
+	if w.bytes < w.target+w.overlap {
+		return nil, 0, false
+	}
+	keep, keptBytes := 0, 0
+	for index := len(w.events) - 1; index >= 0 && keptBytes < w.overlap; index-- {
+		keep++
+		keptBytes += len(w.events[index].Raw)
+	}
+	emit := len(w.events) - keep
+	if emit == 0 && len(w.events) == 1 {
+		emit, keep, keptBytes = 1, 0, 0
+	}
+	if emit == 0 {
+		return nil, 0, false
+	}
+	events := append([]OpenAISSEEvent(nil), w.events...)
+	w.events = append([]OpenAISSEEvent(nil), w.events[emit:]...)
+	w.bytes = keptBytes
+	return events, emit, true
+}
+
+func encodeSSEEvents(events []OpenAISSEEvent) []byte {
+	var body []byte
+	for _, event := range events {
+		body = append(body, event.Raw...)
+	}
+	return body
 }
 
 func (state *envoyStreamState) isResponseOnly() bool {

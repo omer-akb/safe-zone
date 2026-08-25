@@ -163,6 +163,29 @@ type StreamingSpec struct {
 	Enabled bool `json:"enabled"`
 	// +kubebuilder:validation:Enum=None;Windowed
 	Mode string `json:"mode,omitempty"`
+	// WindowBytes is the maximum UTF-8 byte size targeted for a Windowed
+	// response window. SSE events are never split to meet this boundary.
+	// +optional
+	// +kubebuilder:default=4096
+	// +kubebuilder:validation:Minimum=1
+	WindowBytes int32 `json:"windowBytes,omitempty"`
+}
+
+// StreamingMode returns the explicit runtime mode, treating an omitted
+// streaming block as disabled.
+func (s TSZGuardrailPolicySpec) StreamingMode() string {
+	if s.Streaming == nil || !s.Streaming.Enabled {
+		return "None"
+	}
+	return s.Streaming.Mode
+}
+
+// StreamingWindowBytes returns the configured Windowed target size.
+func (s TSZGuardrailPolicySpec) StreamingWindowBytes() int {
+	if s.Streaming == nil || s.Streaming.WindowBytes <= 0 {
+		return 4096
+	}
+	return int(s.Streaming.WindowBytes)
 }
 
 // ClientOverridesSpec controls opt-in client behavior for an attachment.

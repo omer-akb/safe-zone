@@ -63,6 +63,7 @@ type ProcessingRequest struct {
 	PolicyVersion  int
 	FailureMode    policy.FailureMode
 	PolicySnapshot *policy.CompiledSnapshot
+	EndOfStream    bool
 }
 
 type Action string

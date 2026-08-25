@@ -101,6 +101,7 @@ func ToPolicyDefinition(spec securityv1alpha1.TSZGuardrailPolicySpec, scope poli
 			Request:  toFailureMode(spec.FailurePolicy.Request),
 			Response: toFailureMode(spec.FailurePolicy.Response),
 		},
+		Streaming: policy.StreamingSettings{Mode: spec.StreamingMode(), WindowBytes: spec.StreamingWindowBytes()},
 		Telemetry: policy.TelemetrySettings{
 			Enabled: spec.Telemetry.Enabled, MetricsEnabled: spec.Telemetry.MetricsEnabled,
 			TracingEnabled: spec.Telemetry.TracingEnabled, SampleRate: spec.Telemetry.SampleRate,
