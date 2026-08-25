@@ -66,6 +66,18 @@ func TestValidateDefinitionRejectsBlockForWindowedStreaming(t *testing.T) {
 	}
 }
 
+func TestValidateDefinitionRejectsStrictStreamingWithoutDowngradingIt(t *testing.T) {
+	definition := validPolicyDefinition()
+	definition.Streaming = StreamingSettings{Mode: "Strict"}
+	err := ValidateDefinition(definition)
+	if !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("ValidateDefinition() error = %v, want ErrInvalidDefinition", err)
+	}
+	if err == nil || err.Error() != "invalid policy definition: strict streaming is unsupported; use buffered non-streaming response enforcement" {
+		t.Fatalf("ValidateDefinition() error = %v, want strict-streaming guidance", err)
+	}
+}
+
 func TestValidateDefinitionAcceptsMaskOnlyWindowedStreaming(t *testing.T) {
 	definition := validPolicyDefinition()
 	definition.Response.Secret = ActionMask

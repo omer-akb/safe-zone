@@ -158,7 +158,10 @@ func (s TSZGuardrailPolicySpec) FailOpen() bool {
 	return s.FailurePolicy.Request == FailureModeOpen || s.FailurePolicy.Response == FailureModeOpen
 }
 
-// StreamingSpec configures streaming enforcement for an attachment.
+// StreamingSpec configures best-effort streaming enforcement for an
+// attachment. Strict zero-leakage streaming is intentionally unsupported:
+// routes requiring that guarantee must use buffered, non-streaming response
+// enforcement.
 type StreamingSpec struct {
 	Enabled bool `json:"enabled"`
 	// +kubebuilder:validation:Enum=None;Windowed

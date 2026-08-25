@@ -693,10 +693,12 @@ Gateway API **v1.5.1**. Installation and profile selection are documented in
 
 #### Response contract
 
-Only buffered, non-streaming OpenAI Chat Completions traffic is enforced by
-this adapter. The request must use `Content-Type: application/json`; streaming
-requests and unsupported content shapes are processing failures, not silently
-allowed content.
+For a strict no-leakage guarantee, use this buffered, non-streaming OpenAI
+Chat Completions profile. The request must use `Content-Type: application/json`;
+streaming requests and unsupported content shapes are processing failures, not
+silently allowed content. The separate Envoy BYG `Windowed` SSE mode is
+best-effort only: it cannot retract content that Envoy has already sent and is
+not a strict-streaming substitute.
 
 On the response path TSZ reads every string value at
 `choices[].message.content` where `message.role` is `assistant`. It changes

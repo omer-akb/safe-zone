@@ -31,6 +31,20 @@ Windowed enforcement cannot retract a delta that Envoy has already emitted to
 the downstream client. It therefore does not claim zero-leakage or strict
 streaming guarantees; its protection applies to the un-emitted window.
 
+#### Strict-streaming decision
+
+**Decision: strict (zero-leakage) streaming is not supported by the Envoy BYG
+adapter.** A policy may use `None` or `Windowed`; requesting `Strict` is
+rejected during policy validation rather than silently being downgraded.
+
+A strict guarantee would require TSZ to hold every response byte until the
+complete response is inspected. That is buffered, non-streaming response
+enforcement, even if a downstream service later replays the validated body as
+SSE. Routes with a no-leakage requirement must therefore use the buffered
+non-streaming profile and configure response `BLOCK`/`MASK` there. `Windowed`
+is appropriate only where bounded-window enforcement and its residual
+already-emitted-content risk are acceptable.
+
 If Envoy cancels the ext_proc RPC because the downstream disconnects, TSZ
 cancels inline window processing and returns gRPC `CANCELED`. If the RPC
 deadline expires, it returns `DEADLINE_EXCEEDED`. These terminal transport

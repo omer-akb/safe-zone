@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -53,12 +54,61 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 		ContainsSyntheticEmail: strings.Contains(string(body), "demo.user@example.test"),
 	}
 	s.mu.Unlock()
+	if os.Getenv("BYG_MOCK_RESPONSE_MODE") == "sse" {
+		s.writeSSEFixture(w)
+		return
+	}
 	content := os.Getenv("BYG_MOCK_RESPONSE_CONTENT")
 	if content == "" {
 		content = "safe mock response"
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl-kind-mock", "object": "chat.completion", "choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}}}})
+}
+
+// writeSSEFixture serves a checked-in OpenAI-compatible SSE fixture. The
+// fixture, rather than the mock binary, owns event contents so every streaming
+// example can exercise its own event boundaries and completion sequence.
+func (s *server) writeSSEFixture(w http.ResponseWriter) {
+	path := os.Getenv("BYG_MOCK_SSE_FIXTURE")
+	fixture, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, `{"error":"SSE fixture unavailable"}`, http.StatusInternalServerError)
+		return
+	}
+	if len(fixture) == 0 {
+		http.Error(w, `{"error":"SSE fixture is empty"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "text/event-stream")
+	w.Header().Set("cache-control", "no-cache")
+	flusher, _ := w.(http.Flusher)
+	for _, event := range sseFixtureEvents(fixture) {
+		_, _ = w.Write(event)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func sseFixtureEvents(fixture []byte) [][]byte {
+	var events [][]byte
+	for len(fixture) > 0 {
+		lfEnd := bytes.Index(fixture, []byte("\n\n"))
+		crlfEnd := bytes.Index(fixture, []byte("\r\n\r\n"))
+		if lfEnd < 0 && crlfEnd < 0 {
+			events = append(events, fixture)
+			break
+		}
+		end, separatorLength := lfEnd, len("\n\n")
+		if crlfEnd >= 0 && (lfEnd < 0 || crlfEnd < lfEnd) {
+			end, separatorLength = crlfEnd, len("\r\n\r\n")
+		}
+		end += separatorLength
+		events = append(events, fixture[:end])
+		fixture = fixture[end:]
+	}
+	return events
 }
 
 func (s *server) inspect(w http.ResponseWriter, _ *http.Request) {

@@ -578,6 +578,14 @@ func (r *PostgresRepository) transition(ctx context.Context, statement string, a
 }
 
 func ValidateDefinition(definition PolicyDefinition) error {
+	// A strict (zero-leakage) response guarantee requires TSZ to retain every
+	// byte until the complete response is validated. The Envoy adapter's
+	// Windowed mode deliberately emits validated prefixes, so it cannot offer
+	// that guarantee. Keep Strict out of the streaming policy surface instead
+	// of silently degrading it to Windowed or audit-only behavior.
+	if strings.EqualFold(definition.Streaming.Mode, "strict") {
+		return fmt.Errorf("%w: strict streaming is unsupported; use buffered non-streaming response enforcement", ErrInvalidDefinition)
+	}
 	if definition.Streaming.Mode != "" && definition.Streaming.Mode != StreamingModeNone && definition.Streaming.Mode != StreamingModeWindowed {
 		return fmt.Errorf("%w: streaming mode must be None or Windowed, got %q", ErrInvalidDefinition, definition.Streaming.Mode)
 	}

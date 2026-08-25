@@ -278,9 +278,9 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 	if root.kind != jsonObject {
 		return nil, chatRequestError(ChatRequestUnsupportedRequest, -1, "", ErrUnsupportedChatRequest)
 	}
-	if stream := root.object["stream"]; stream != nil && stream.kind == jsonBoolean && stream.boolean {
-		return nil, chatRequestError(ChatRequestUnsupportedRequest, -1, ".stream", ErrUnsupportedChatRequest)
-	}
+	// stream controls the upstream response representation. Request-side
+	// extraction and mutation are identical for streamed and buffered Chat
+	// Completions requests; response processing chooses the SSE path later.
 	messages := root.object["messages"]
 	if messages == nil || messages.kind != jsonArray {
 		return nil, chatRequestError(ChatRequestUnsupportedRequest, -1, ".messages", ErrUnsupportedChatRequest)
