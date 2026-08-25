@@ -48,6 +48,21 @@ type cancellationProcessor struct {
 	exited  chan struct{}
 }
 
+// cancellationWindowProcessor blocks only while processing an SSE window. It
+// lets the request and response headers complete so tests can cancel precisely
+// while the windowed streaming path is in flight.
+type cancellationWindowProcessor struct{ *cancellationProcessor }
+
+type failingWindowProcessor struct{}
+
+func (failingWindowProcessor) Process(context.Context, ProcessingRequest) (ProcessingResult, error) {
+	return ProcessingResult{Action: ActionAllow}, nil
+}
+
+func (failingWindowProcessor) ProcessSSEWindow(context.Context, ProcessingRequest, []OpenAISSEEvent) (ProcessingResult, []OpenAISSEEvent, error) {
+	return ProcessingResult{}, nil, errors.New("injected SSE window failure")
+}
+
 type mockUpstream struct{ requests atomic.Int64 }
 
 func (upstream *mockUpstream) forward(_ []byte) { upstream.requests.Add(1) }
@@ -104,6 +119,23 @@ func (failingAuditor) Audit(context.Context, guardrails.AuditEvent) error {
 	return errors.New("audit sink unavailable")
 }
 
+type blockingOperationalAuditor struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (auditor blockingOperationalAuditor) Audit(_ context.Context, event guardrails.AuditEvent) error {
+	if eventType := event.EventType; eventType != "operational" {
+		return nil
+	}
+	select {
+	case auditor.started <- struct{}{}:
+	default:
+	}
+	<-auditor.release
+	return nil
+}
+
 type processorFunc func(context.Context, ProcessingRequest) (ProcessingResult, error)
 
 func (fn processorFunc) Process(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
@@ -122,6 +154,17 @@ func (processor *cancellationProcessor) Process(ctx context.Context, _ Processin
 	<-ctx.Done()
 	processor.exited <- struct{}{}
 	return ProcessingResult{}, ctx.Err()
+}
+
+func (processor cancellationWindowProcessor) Process(context.Context, ProcessingRequest) (ProcessingResult, error) {
+	return ProcessingResult{Action: ActionAllow}, nil
+}
+
+func (processor cancellationWindowProcessor) ProcessSSEWindow(ctx context.Context, _ ProcessingRequest, _ []OpenAISSEEvent) (ProcessingResult, []OpenAISSEEvent, error) {
+	processor.started <- struct{}{}
+	<-ctx.Done()
+	processor.exited <- struct{}{}
+	return ProcessingResult{}, nil, ctx.Err()
 }
 
 func newKeyedPolicyCache(versions map[string]int) *keyedPolicyCache {
@@ -216,6 +259,7 @@ func newExternalProcessorTestClient(t *testing.T, processor Processor, cache Pol
 
 func newExternalProcessorTestClientForServer(t *testing.T, server *Server) extprocv3.ExternalProcessorClient {
 	t.Helper()
+	t.Cleanup(server.Close)
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	extprocv3.RegisterExternalProcessorServer(grpcServer, server)
@@ -1210,6 +1254,176 @@ func TestServerPropagatesClientTimeoutToProcessor(t *testing.T) {
 		t.Fatalf("timeout error = %v (%s), want DEADLINE_EXCEEDED", err, status.Code(err))
 	}
 	awaitSignal(t, processor.exited, "processor exit after client timeout")
+}
+
+func TestServerCancelsWindowedSSEProcessingWhenClientDisconnects(t *testing.T) {
+	processor := cancellationWindowProcessor{newCancellationProcessor(1)}
+	cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{
+		PolicyID: "default",
+		Version:  1,
+		Definition: policy.PolicyDefinition{
+			Response:  policy.ResponsePolicy{Enabled: true},
+			Streaming: policy.StreamingSettings{Mode: policy.StreamingModeWindowed, WindowBytes: 1},
+		},
+	}}
+	client := newExternalProcessorTestClient(t, processor, cache)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := client.Process(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := stream.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-sse-cancel", "default", true)); err != nil {
+		t.Fatalf("send request headers: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive request headers response: %v", err)
+	}
+	responseHeaders := responseHeadersForAdapterTest(false)
+	responseHeaders.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+	if err := stream.Send(responseHeaders); err != nil {
+		t.Fatalf("send response headers: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive response headers response: %v", err)
+	}
+	if err := stream.Send(responseBodyForAdapterTest([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"), true)); err != nil {
+		t.Fatalf("send SSE response body: %v", err)
+	}
+	awaitSignal(t, processor.started, "windowed SSE processor start before client disconnect")
+
+	// Envoy cancelling its ext_proc RPC is how a downstream disconnect reaches
+	// the processor. The in-flight window must inherit that cancellation.
+	cancel()
+	if _, err := stream.Recv(); status.Code(err) != codes.Canceled {
+		t.Fatalf("disconnect error = %v (%s), want CANCELED", err, status.Code(err))
+	}
+	awaitSignal(t, processor.exited, "windowed SSE processor exit after client disconnect")
+}
+
+func TestWindowedSSECancellationReleasesPermitBeforeOperationalAuditCompletes(t *testing.T) {
+	processor := cancellationWindowProcessor{newCancellationProcessor(1)}
+	auditor := blockingOperationalAuditor{started: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(auditor.release)
+	cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: policy.PolicyDefinition{
+		Response:  policy.ResponsePolicy{Enabled: true},
+		Streaming: policy.StreamingSettings{Mode: policy.StreamingModeWindowed, WindowBytes: 1},
+	}}}
+	server, err := NewServerWithSettings(processor, cache, auditor, ServerSettings{FailMode: policy.FailureModeOpen, MaxBodyBytes: 1024, ProcessingTimeout: time.Second}, 1)
+	if err != nil {
+		t.Fatalf("NewServerWithSettings: %v", err)
+	}
+	client := newExternalProcessorTestClientForServer(t, server)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := client.Process(ctx)
+	if err != nil {
+		t.Fatalf("open first stream: %v", err)
+	}
+	if err := stream.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-permit-cancel", "default", true)); err != nil {
+		t.Fatalf("send first request headers: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive first request headers response: %v", err)
+	}
+	responseHeaders := responseHeadersForAdapterTest(false)
+	responseHeaders.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+	if err := stream.Send(responseHeaders); err != nil {
+		t.Fatalf("send first response headers: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive first response headers response: %v", err)
+	}
+	if err := stream.Send(responseBodyForAdapterTest([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"), true)); err != nil {
+		t.Fatalf("send first SSE body: %v", err)
+	}
+	awaitSignal(t, processor.started, "first windowed SSE processor start")
+	cancel()
+	if _, err := stream.Recv(); status.Code(err) != codes.Canceled {
+		t.Fatalf("first stream cancellation = %v (%s), want CANCELED", err, status.Code(err))
+	}
+	awaitSignal(t, processor.exited, "first windowed SSE processor exit")
+	awaitSignal(t, auditor.started, "operational audit dispatch")
+
+	// The audit worker is intentionally blocked. A second stream proves the
+	// canceled stream's permit was released before audit delivery completed.
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	second, err := client.Process(secondCtx)
+	if err != nil {
+		t.Fatalf("open second stream: %v", err)
+	}
+	if err := second.Send(requestHeadersMessageWithEndOfStream("ignored", "envoy-permit-next", "default", true)); err != nil {
+		t.Fatalf("send second request headers: %v", err)
+	}
+	if _, err := second.Recv(); err != nil {
+		t.Fatalf("second stream did not acquire released permit while audit was blocked: %v", err)
+	}
+}
+
+func TestServerFailsOpenForWindowedSSEProcessorError(t *testing.T) {
+	cache := snapshotPolicyCache{snapshot: policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: policy.PolicyDefinition{
+		Response: policy.ResponsePolicy{Enabled: true}, Streaming: policy.StreamingSettings{Mode: policy.StreamingModeWindowed, WindowBytes: 1},
+	}}}
+	server, err := NewServerWithSettings(failingWindowProcessor{}, cache, nil, ServerSettings{FailMode: policy.FailureModeOpen, MaxBodyBytes: 1024, ProcessingTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewServerWithSettings: %v", err)
+	}
+	stream, err := newExternalProcessorTestClientForServer(t, server).Process(context.Background())
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	for _, message := range []*extprocv3.ProcessingRequest{requestHeadersMessageWithEndOfStream("ignored", "envoy-open", "default", true), responseHeadersForAdapterTest(false)} {
+		if message.GetResponseHeaders() != nil {
+			message.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+		}
+		if err := stream.Send(message); err != nil {
+			t.Fatalf("send setup: %v", err)
+		}
+		if _, err := stream.Recv(); err != nil {
+			t.Fatalf("receive setup: %v", err)
+		}
+	}
+	raw := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"unchanged\"}}]}\n\n")
+	if err := stream.Send(responseBodyForAdapterTest(raw, true)); err != nil {
+		t.Fatalf("send SSE: %v", err)
+	}
+	response, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("receive SSE: %v", err)
+	}
+	if got := response.GetResponseBody().GetResponse().GetBodyMutation().GetBody(); string(got) != string(raw) {
+		t.Fatalf("fail-open body = %q, want %q", got, raw)
+	}
+	metadata := response.GetDynamicMetadata().GetFields()[safeMetadataNamespace].GetStructValue().GetFields()
+	if !metadata["degraded"].GetBoolValue() {
+		t.Fatalf("fail-open response metadata = %v, want degraded=true", metadata)
+	}
+}
+
+func TestServerDropsOperationalAuditWhenQueueIsFullWithoutBlocking(t *testing.T) {
+	server, err := NewServer(NewAllowProcessor(), newKeyedPolicyCache(nil))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer server.Close()
+	server.Close()
+	for range cap(server.operationalAudits) {
+		server.operationalAudits <- guardrails.AuditEvent{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() { server.enqueueCancellationAudit(ctx, newStreamState()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("full operational audit queue blocked cancellation handling")
+	}
+	if got, want := len(server.operationalAudits), cap(server.operationalAudits); got != want {
+		t.Fatalf("queue len = %d, want %d; event was not dropped", got, want)
+	}
 }
 
 func TestServerPinsTrustedRoutePolicyAndRejectsInvalidPolicyHeaders(t *testing.T) {

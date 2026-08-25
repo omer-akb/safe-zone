@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -53,6 +54,10 @@ type Server struct {
 	maxStreamBufferBytes  int
 	processingTimeout     time.Duration
 	responseStateObserver ResponseStateObserver
+	operationalAudits     chan guardrails.AuditEvent
+	operationalStop       context.CancelFunc
+	operationalWorkers    sync.WaitGroup
+	closeOnce             sync.Once
 }
 
 // ResponseStateObserver records a bounded operational outcome without
@@ -144,7 +149,7 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 	if settings.ResponseStateObserver == nil {
 		settings.ResponseStateObserver = noopResponseStateObserver{}
 	}
-	return &Server{
+	server := &Server{
 		processor:          processor,
 		policyCache:        policyCache,
 		policyResolver:     resolver,
@@ -152,7 +157,24 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 		streamPermit:       make(chan struct{}, limit),
 		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, maxStreamBufferBytes: settings.MaxStreamBufferBytes, processingTimeout: settings.ProcessingTimeout,
 		responseStateObserver: settings.ResponseStateObserver,
-	}, nil
+		operationalAudits:     make(chan guardrails.AuditEvent, 100),
+	}
+	operationalCtx, cancelOperational := context.WithCancel(context.Background())
+	server.operationalStop = cancelOperational
+	for range 4 {
+		server.operationalWorkers.Add(1)
+		go server.runOperationalAuditWorker(operationalCtx)
+	}
+	return server, nil
+}
+
+// Close stops bounded operational-audit workers. It is idempotent so tests and
+// the application shutdown path may both call it safely.
+func (s *Server) Close() {
+	s.closeOnce.Do(func() {
+		s.operationalStop()
+		s.operationalWorkers.Wait()
+	})
 }
 
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
@@ -164,6 +186,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 	state := newStreamState()
 	state.protocol.setStreamBufferLimit(s.maxStreamBufferBytes)
+	defer state.protocol.close()
+	defer s.enqueueCancellationAudit(ctx, state)
 	for {
 		message, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -241,6 +265,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		if kind == envoyResponseBody && state.protocol.isStreamingResponse() {
 			response, terminal, adaptErr := s.processWindowedResponse(ctx, state, request)
 			if adaptErr != nil {
+				if contextErr := grpcContextError(ctx, adaptErr); contextErr != nil {
+					return contextErr
+				}
 				if errors.Is(adaptErr, ErrSSEBufferLimit) {
 					return status.Error(codes.ResourceExhausted, "streaming response buffer limit exceeded")
 				}
@@ -347,7 +374,14 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 	result, mutated, err := windowProcessor.ProcessSSEWindow(processingCtx, request, events)
 	cancel()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, true, status.FromContextError(ctx.Err()).Err()
+		}
 		result = s.failureResult(request)
+		// A fail-open response must pass through the original, event-aligned
+		// window when its processor fails. Processors are permitted to return
+		// no mutations alongside an error, so never slice a nil result here.
+		mutated = events
 	}
 	enrichResultIdentity(&result, request, envoyResponseBody, 0)
 	if result.Action == ActionBlock {
@@ -357,6 +391,47 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 	result.Body = encodeSSEEvents(mutated[:emit])
 	response, adaptErr := responseToEnvoy(envoyResponseBody, StageResponse, result)
 	return response, false, adaptErr
+}
+
+func (s *Server) enqueueCancellationAudit(ctx context.Context, state *streamState) {
+	if ctx.Err() == nil {
+		return
+	}
+	reason := "stream_cancelled"
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		reason = "stream_deadline_exceeded"
+	}
+	event := guardrails.AuditEvent{
+		Timestamp: time.Now().UTC(), EventType: "operational", Reason: reason,
+		RID: state.rid, RequestID: state.envoyReqID, Adapter: "envoy-gateway",
+		PolicyID: state.policyID,
+	}
+	if state.hasPolicySnapshot {
+		event.PolicyVersion = state.policySnapshot.Version
+	}
+	select {
+	case s.operationalAudits <- event:
+	default:
+		// TODO(phase-5): expose dropped operational audit events as a metric.
+		log.Printf("warn: dropped operational audit event type=%s reason=%s", event.EventType, event.Reason)
+	}
+}
+
+func (s *Server) runOperationalAuditWorker(ctx context.Context) {
+	defer s.operationalWorkers.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-s.operationalAudits:
+			auditCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := s.auditor.Audit(auditCtx, event)
+			cancel()
+			if err != nil {
+				log.Printf("operational audit delivery failed: %v", err)
+			}
+		}
+	}
 }
 
 // responseOnlyResult handles the exceptional case where Envoy invokes
@@ -388,7 +463,7 @@ func (s *Server) auditResponseWithoutRequestState(ctx context.Context, request P
 		return err
 	}
 	return s.auditor.Audit(ctx, guardrails.AuditEvent{
-		Timestamp: time.Now().UTC(), RID: NewBYGRID(), RequestID: request.EnvoyReqID,
+		Timestamp: time.Now().UTC(), EventType: "guardrail_decision", RID: NewBYGRID(), RequestID: request.EnvoyReqID,
 		Adapter: "envoy-gateway", Target: guardrails.BuildAuditTarget("", "", ""),
 		Stage: guardrails.AuditStageResponse, Action: auditAction, Reason: reason, Degraded: degraded,
 	})
@@ -493,6 +568,7 @@ func enrichResultIdentity(result *ProcessingResult, request ProcessingRequest, k
 	result.Metadata.Stage = request.Stage
 	result.Metadata.Action = result.Action
 	result.Metadata.ProcessorLatencyMS = latency.Milliseconds()
+	result.Metadata.Degraded = result.Degraded
 	// Request-header mutations are sent before the buffered body is forwarded.
 	// They communicate both distinct IDs without mutating Envoy's request ID.
 	if kind != envoyRequestHeaders || request.Stage != StageRequest || result.Action == ActionBlock {
@@ -514,7 +590,7 @@ func (s *Server) auditRequest(ctx context.Context, request ProcessingRequest, re
 		return err
 	}
 	return s.auditor.Audit(ctx, guardrails.AuditEvent{
-		Timestamp: time.Now().UTC(), RID: request.RID, RequestID: request.EnvoyReqID, TraceID: request.TraceID,
+		Timestamp: time.Now().UTC(), EventType: "guardrail_decision", RID: request.RID, RequestID: request.EnvoyReqID, TraceID: request.TraceID,
 		Adapter: "envoy-gateway", Target: guardrails.BuildAuditTarget(request.Gateway, request.Tenant, request.Route),
 		Gateway: request.Gateway, Route: request.Route, Tenant: request.Tenant,
 		PolicyID: request.PolicyID, PolicyVersion: request.PolicyVersion, Stage: guardrails.AuditStageRequest,

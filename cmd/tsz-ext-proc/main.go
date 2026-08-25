@@ -101,6 +101,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize Envoy adapter: %v", err)
 	}
+	defer transport.Close()
 
 	dependencies := extproc.Dependencies{
 		DB:             database.DB,

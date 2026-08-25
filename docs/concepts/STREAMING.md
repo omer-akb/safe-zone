@@ -19,6 +19,26 @@ For streaming responses, TSZ can:
 2. **Synchronously validate and sanitize** output while streaming (`stream-sync` mode)
 3. **Asynchronously validate** the full streamed output for audit/SIEM (`stream-async` mode)
 
+### Envoy BYG / `ext_proc` streaming
+
+The header-driven modes documented below describe the legacy HTTP gateway.
+The Envoy Bring Your Gateway (BYG) adapter uses its stream-pinned policy's
+`Streaming.Mode: Windowed` configuration instead. It parses complete OpenAI
+SSE events, retains a bounded trailing overlap, and enforces a complete window
+before emitting its safe portion.
+
+Windowed enforcement cannot retract a delta that Envoy has already emitted to
+the downstream client. It therefore does not claim zero-leakage or strict
+streaming guarantees; its protection applies to the un-emitted window.
+
+If Envoy cancels the ext_proc RPC because the downstream disconnects, TSZ
+cancels inline window processing and returns gRPC `CANCELED`. If the RPC
+deadline expires, it returns `DEADLINE_EXCEEDED`. These terminal transport
+conditions are not guardrail-engine failures and do not invoke a fail-open or
+fail-closed enforcement decision. Cancellation is recorded as a PII-safe,
+best-effort operational audit event; a full audit queue never blocks the
+stream.
+
 These behaviours are controlled via HTTP headers and do not require additional environment variables.
 
 ---

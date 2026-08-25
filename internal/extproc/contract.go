@@ -109,4 +109,5 @@ type SafeMetadata struct {
 	Categories         []string        `json:"categories"`
 	DetectionCount     int             `json:"detection_count"`
 	ProcessorLatencyMS int64           `json:"processor_latency_ms"`
+	Degraded           bool            `json:"degraded"`
 }

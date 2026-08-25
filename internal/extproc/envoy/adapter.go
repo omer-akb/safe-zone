@@ -178,6 +178,17 @@ func (state *envoyStreamState) takeWindow(endOfStream bool) ([]OpenAISSEEvent, i
 	return events, emit, ready, nil
 }
 
+// close releases per-stream parser and window references on every Process
+// exit path, including cancellation and malformed protocol sequences.
+func (state *envoyStreamState) close() {
+	if state.windowedResponse != nil {
+		state.windowedResponse.events = nil
+		state.windowedResponse.bytes = 0
+	}
+	state.completedSSEEvents = nil
+	state.responseSSE = nil
+}
+
 type sseWindow struct {
 	events                           []OpenAISSEEvent
 	bytes, target, overlap, maxBytes int
@@ -392,7 +403,7 @@ func headerMutationToEnvoy(mutations map[string]string) *extprocv3.HeaderMutatio
 func metadataToEnvoy(metadata SafeMetadata) (*structpb.Struct, error) {
 	if metadata.RequestID == "" && metadata.RID == "" && metadata.PolicyID == "" && metadata.PolicyVersion == 0 &&
 		metadata.Adapter == "" && metadata.Stage == "" && metadata.Action == "" && len(metadata.Categories) == 0 &&
-		metadata.DetectionCount == 0 && metadata.ProcessorLatencyMS == 0 {
+		metadata.DetectionCount == 0 && metadata.ProcessorLatencyMS == 0 && !metadata.Degraded {
 		return nil, nil
 	}
 	categories := make([]any, len(metadata.Categories))
@@ -406,6 +417,7 @@ func metadataToEnvoy(metadata SafeMetadata) (*structpb.Struct, error) {
 			"adapter": metadata.Adapter, "stage": string(metadata.Stage), "action": string(metadata.Action),
 			"categories": categories, "detection_count": metadata.DetectionCount,
 			"processor_latency_ms": metadata.ProcessorLatencyMS,
+			"degraded":             metadata.Degraded,
 		},
 	})
 	if err != nil {

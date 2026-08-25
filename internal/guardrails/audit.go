@@ -26,17 +26,20 @@ func (stage AuditStage) Validate() error {
 // AuditEvent is gateway-neutral and contains aggregate security metadata only.
 // It must never contain request content or raw matched values.
 type AuditEvent struct {
-	Timestamp          time.Time  `json:"timestamp"`
-	RID                string     `json:"rid"`
-	RequestID          string     `json:"request_id"`
-	TraceID            string     `json:"trace_id,omitempty"`
-	Adapter            string     `json:"adapter"`
-	Target             string     `json:"target"`
-	Gateway            string     `json:"gateway"`
-	Route              string     `json:"route"`
-	Tenant             string     `json:"tenant,omitempty"`
-	PolicyID           string     `json:"policy_id"`
-	PolicyVersion      int        `json:"policy_version"`
+	Timestamp time.Time `json:"timestamp"`
+	// EventType distinguishes guardrail decisions from operational lifecycle
+	// signals. Empty remains compatible with older decision-event consumers.
+	EventType     string `json:"event_type,omitempty"`
+	RID           string `json:"rid"`
+	RequestID     string `json:"request_id"`
+	TraceID       string `json:"trace_id,omitempty"`
+	Adapter       string `json:"adapter"`
+	Target        string `json:"target"`
+	Gateway       string `json:"gateway"`
+	Route         string `json:"route"`
+	Tenant        string `json:"tenant,omitempty"`
+	PolicyID      string `json:"policy_id"`
+	PolicyVersion int    `json:"policy_version"`
 	// Reason is a bounded operational classification, never detector output or
 	// request/response content.
 	Reason             string     `json:"reason,omitempty"`

@@ -23,6 +23,10 @@ const (
 	defaultExtProcGracefulShutdownTimeout         = 10 * time.Second
 )
 
+// DefaultExtProcProcessingTimeout is also used by legacy AI validation as its
+// bounded fallback budget, keeping the two request-processing paths aligned.
+const DefaultExtProcProcessingTimeout = time.Duration(defaultExtProcProcessingTimeoutMS) * time.Millisecond
+
 type ExtProcFailMode string
 
 const (
