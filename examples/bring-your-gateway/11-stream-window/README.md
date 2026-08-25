@@ -11,6 +11,9 @@ and permits only response `MASK` actions. The fixture is mounted into the
 general-purpose local mock, so other streaming examples can supply different
 event sequences without changing the mock binary.
 
+For the full BYG Windowed security contract and cancellation semantics, see
+[Streaming concepts](../../../docs/concepts/STREAMING.md#2-byg--envoy-ext_proc-windowed-enforcement).
+
 ## Security guarantee and limitation
 
 The example verifies that `alice@example.com` is absent from the client SSE
