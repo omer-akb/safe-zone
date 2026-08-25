@@ -53,6 +53,8 @@ spec:
               value: "4194304"
             - name: TSZ_MAX_BODY_BYTES
               value: "1048576"
+            - name: TSZ_MAX_STREAM_BUFFER_BYTES
+              value: "262144"
             - name: TSZ_PROCESSING_TIMEOUT_MS
               value: "2000"
             - name: TSZ_POLICY_RECONCILE_INTERVAL

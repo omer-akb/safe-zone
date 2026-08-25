@@ -14,6 +14,7 @@ var extProcEnvKeys = []string{
 	"TSZ_MAX_CONCURRENT_STREAMS",
 	"TSZ_MAX_GRPC_MESSAGE_BYTES",
 	"TSZ_MAX_BODY_BYTES",
+	"TSZ_MAX_STREAM_BUFFER_BYTES",
 	"TSZ_PROCESSING_TIMEOUT_MS",
 	"TSZ_POLICY_RECONCILE_INTERVAL",
 	"TSZ_POLICY_MAX_STALENESS",
@@ -44,6 +45,9 @@ func TestLoadExtProcConfigDefaults(t *testing.T) {
 	if cfg.MaxBodyBytes != 1024*1024 {
 		t.Fatalf("MaxBodyBytes = %d, want 1048576", cfg.MaxBodyBytes)
 	}
+	if cfg.MaxStreamBufferBytes != 256*1024 {
+		t.Fatalf("MaxStreamBufferBytes = %d, want 262144", cfg.MaxStreamBufferBytes)
+	}
 	if cfg.ProcessingTimeout != 2*time.Second {
 		t.Fatalf("ProcessingTimeout = %s, want 2s", cfg.ProcessingTimeout)
 	}
@@ -66,6 +70,7 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	t.Setenv("TSZ_MAX_CONCURRENT_STREAMS", "25")
 	t.Setenv("TSZ_MAX_GRPC_MESSAGE_BYTES", "8388608")
 	t.Setenv("TSZ_MAX_BODY_BYTES", "2097152")
+	t.Setenv("TSZ_MAX_STREAM_BUFFER_BYTES", "131072")
 	t.Setenv("TSZ_PROCESSING_TIMEOUT_MS", "750")
 	t.Setenv("TSZ_POLICY_RECONCILE_INTERVAL", "45s")
 	t.Setenv("TSZ_POLICY_MAX_STALENESS", "8m")
@@ -79,7 +84,7 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	if cfg.HTTPPort != 18080 || cfg.GRPCPort != 19002 || cfg.FailMode != ExtProcFailOpen {
 		t.Fatalf("unexpected basic config: %+v", cfg)
 	}
-	if cfg.MaxConcurrentStreams != 25 || cfg.MaxGRPCMessageBytes != 8388608 || cfg.MaxBodyBytes != 2097152 {
+	if cfg.MaxConcurrentStreams != 25 || cfg.MaxGRPCMessageBytes != 8388608 || cfg.MaxBodyBytes != 2097152 || cfg.MaxStreamBufferBytes != 131072 {
 		t.Fatalf("unexpected limit config: %+v", cfg)
 	}
 	if cfg.ProcessingTimeout != 750*time.Millisecond || cfg.PolicyReconcileInterval != 45*time.Second || cfg.PolicyMaxStaleness != 8*time.Minute || cfg.PolicyReconcileFailureThreshold != 7 || cfg.GracefulShutdownTimeout != 15*time.Second {
@@ -101,6 +106,7 @@ func TestLoadExtProcConfigRejectsInvalidValues(t *testing.T) {
 		{name: "zero streams", key: "TSZ_MAX_CONCURRENT_STREAMS", value: "0"},
 		{name: "negative gRPC message bytes", key: "TSZ_MAX_GRPC_MESSAGE_BYTES", value: "-4"},
 		{name: "zero body bytes", key: "TSZ_MAX_BODY_BYTES", value: "0"},
+		{name: "zero stream buffer bytes", key: "TSZ_MAX_STREAM_BUFFER_BYTES", value: "0"},
 		{name: "invalid processing timeout", key: "TSZ_PROCESSING_TIMEOUT_MS", value: "soon"},
 		{name: "negative processing timeout", key: "TSZ_PROCESSING_TIMEOUT_MS", value: "-1"},
 		{name: "zero reconcile interval", key: "TSZ_POLICY_RECONCILE_INTERVAL", value: "0s"},

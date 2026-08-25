@@ -2,6 +2,7 @@ package envoy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -352,7 +353,7 @@ func testHeaderMap(values ...[2]string) *corev3.HeaderMap {
 }
 
 func TestSSEWindowKeepsEventAtomicTrailingOverlap(t *testing.T) {
-	window := newSSEWindow(256, 512)
+	window := newSSEWindow(256, 512, 0)
 	event := func(size int) OpenAISSEEvent { return OpenAISSEEvent{Raw: make([]byte, size)} }
 	window.add([]OpenAISSEEvent{event(300), event(300), event(300)})
 	events, emit, ready := window.next(false)
@@ -361,6 +362,13 @@ func TestSSEWindowKeepsEventAtomicTrailingOverlap(t *testing.T) {
 	}
 	if len(window.events) != 2 || window.bytes != 600 {
 		t.Fatalf("retained overlap = %d events / %d bytes, want 2 / 600", len(window.events), window.bytes)
+	}
+}
+
+func TestSSEWindowRejectsBufferOverflow(t *testing.T) {
+	window := newSSEWindow(256, 512, 10)
+	if err := window.add([]OpenAISSEEvent{{Raw: make([]byte, 11)}}); !errors.Is(err, ErrSSEBufferLimit) {
+		t.Fatalf("add() error = %v, want ErrSSEBufferLimit", err)
 	}
 }
 

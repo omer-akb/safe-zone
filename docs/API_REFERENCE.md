@@ -732,6 +732,7 @@ The manual attachment requires these fields:
 | --- | --- | --- |
 | `TSZ_FAIL_MODE` | `closed` | Fallback when no policy-specific failure mode is available. |
 | `TSZ_MAX_BODY_BYTES` | `1048576` | Maximum buffered request **and** response body size. |
+| `TSZ_MAX_STREAM_BUFFER_BYTES` | `262144` | Maximum per-stream SSE parser or window buffer. Overflow terminates the ext_proc stream with `RESOURCE_EXHAUSTED`; Envoy's external-processor failure behavior then applies. |
 | `TSZ_MAX_GRPC_MESSAGE_BYTES` | `4194304` | Maximum ext_proc gRPC message size. |
 | `TSZ_PROCESSING_TIMEOUT_MS` | `2000` | TSZ processing deadline for one ext_proc message. |
 | `TSZ_MAX_CONCURRENT_STREAMS` | `100` | Maximum concurrent ext_proc streams per processor replica. |

@@ -94,6 +94,7 @@ func main() {
 	}
 	transport, err := envoy.NewServerWithResolverAndSettings(processor, policyCache, resolver, auditor, envoy.ServerSettings{
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
+		MaxStreamBufferBytes:  extProcConfig.MaxStreamBufferBytes,
 		ProcessingTimeout:     extProcConfig.ProcessingTimeout,
 		ResponseStateObserver: responseStateMetrics,
 	}, extProcConfig.MaxConcurrentStreams)

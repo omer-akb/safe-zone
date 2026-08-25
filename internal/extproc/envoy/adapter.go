@@ -68,6 +68,13 @@ type envoyStreamState struct {
 	responseSSE         *OpenAISSEParser
 	windowedResponse    *sseWindow
 	completedSSEEvents  []OpenAISSEEvent
+	streamBufferLimit   int
+}
+
+func (state *envoyStreamState) setStreamBufferLimit(limit int) {
+	if limit > 0 {
+		state.streamBufferLimit = limit
+	}
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -111,7 +118,7 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.responseEnded = typed.ResponseHeaders.GetEndOfStream()
 		state.responseStreaming = isSSEContentType(FirstHeader(headers, "content-type"))
 		if state.responseStreaming {
-			state.responseSSE = &OpenAISSEParser{}
+			state.responseSSE = NewOpenAISSEParser(state.streamBufferLimit)
 		}
 		request := contractRequest(StageResponse, headers, nil, attributes)
 		request.EndOfStream = typed.ResponseHeaders.GetEndOfStream()
@@ -155,35 +162,42 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 
 func (state *envoyStreamState) enableWindowedResponse(windowBytes int) {
 	if state.responseStreaming && state.windowedResponse == nil {
-		state.windowedResponse = newSSEWindow(windowBytes, 512)
+		state.windowedResponse = newSSEWindow(windowBytes, 512, state.streamBufferLimit)
 	}
 }
 
-func (state *envoyStreamState) takeWindow(endOfStream bool) ([]OpenAISSEEvent, int, bool) {
+func (state *envoyStreamState) takeWindow(endOfStream bool) ([]OpenAISSEEvent, int, bool, error) {
 	if state.windowedResponse == nil {
-		return nil, 0, false
+		return nil, 0, false, nil
 	}
-	state.windowedResponse.add(state.completedSSEEvents)
+	if err := state.windowedResponse.add(state.completedSSEEvents); err != nil {
+		return nil, 0, false, err
+	}
 	state.completedSSEEvents = nil
-	return state.windowedResponse.next(endOfStream)
+	events, emit, ready := state.windowedResponse.next(endOfStream)
+	return events, emit, ready, nil
 }
 
 type sseWindow struct {
-	events                 []OpenAISSEEvent
-	bytes, target, overlap int
+	events                           []OpenAISSEEvent
+	bytes, target, overlap, maxBytes int
 }
 
-func newSSEWindow(target, overlap int) *sseWindow {
+func newSSEWindow(target, overlap, maxBytes int) *sseWindow {
 	if target <= 0 {
 		target = 4096
 	}
-	return &sseWindow{target: target, overlap: overlap}
+	return &sseWindow{target: target, overlap: overlap, maxBytes: maxBytes}
 }
-func (w *sseWindow) add(events []OpenAISSEEvent) {
+func (w *sseWindow) add(events []OpenAISSEEvent) error {
 	for _, event := range events {
+		if w.maxBytes > 0 && len(event.Raw) > w.maxBytes-w.bytes {
+			return ErrSSEBufferLimit
+		}
 		w.events = append(w.events, event)
 		w.bytes += len(event.Raw)
 	}
+	return nil
 }
 func (w *sseWindow) next(end bool) ([]OpenAISSEEvent, int, bool) {
 	if end {

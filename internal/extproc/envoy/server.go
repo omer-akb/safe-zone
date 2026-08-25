@@ -50,6 +50,7 @@ type Server struct {
 	streamPermit          chan struct{}
 	defaultFailureMode    policy.FailureMode
 	maxBodyBytes          int64
+	maxStreamBufferBytes  int
 	processingTimeout     time.Duration
 	responseStateObserver ResponseStateObserver
 }
@@ -70,14 +71,18 @@ func (s *Server) Register(server *grpc.Server) {
 }
 
 type ServerSettings struct {
-	FailMode              policy.FailureMode
-	MaxBodyBytes          int64
+	FailMode     policy.FailureMode
+	MaxBodyBytes int64
+	// MaxStreamBufferBytes bounds the per-stream SSE parser and window queue.
+	// The Process loop sends a response before Recv'ing the next message, so it
+	// also provides transport-level backpressure to Envoy.
+	MaxStreamBufferBytes  int
 	ProcessingTimeout     time.Duration
 	ResponseStateObserver ResponseStateObserver
 }
 
 func defaultServerSettings() ServerSettings {
-	return ServerSettings{FailMode: policy.FailureModeClosed, MaxBodyBytes: 1024 * 1024, ProcessingTimeout: 2 * time.Second}
+	return ServerSettings{FailMode: policy.FailureModeClosed, MaxBodyBytes: 1024 * 1024, MaxStreamBufferBytes: 256 * 1024, ProcessingTimeout: 2 * time.Second}
 }
 
 func NewServer(processor Processor, policyCache PolicyCache, maxConcurrentStreams ...uint32) (*Server, error) {
@@ -130,6 +135,9 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 	if settings.MaxBodyBytes <= 0 {
 		settings.MaxBodyBytes = defaults.MaxBodyBytes
 	}
+	if settings.MaxStreamBufferBytes <= 0 {
+		settings.MaxStreamBufferBytes = defaults.MaxStreamBufferBytes
+	}
 	if settings.ProcessingTimeout <= 0 {
 		settings.ProcessingTimeout = defaults.ProcessingTimeout
 	}
@@ -142,7 +150,7 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 		policyResolver:     resolver,
 		auditor:            auditor,
 		streamPermit:       make(chan struct{}, limit),
-		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, processingTimeout: settings.ProcessingTimeout,
+		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, maxStreamBufferBytes: settings.MaxStreamBufferBytes, processingTimeout: settings.ProcessingTimeout,
 		responseStateObserver: settings.ResponseStateObserver,
 	}, nil
 }
@@ -155,6 +163,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	defer func() { <-s.streamPermit }()
 
 	state := newStreamState()
+	state.protocol.setStreamBufferLimit(s.maxStreamBufferBytes)
 	for {
 		message, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -172,6 +181,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 		request, kind, err := requestFromEnvoy(message, state.protocol)
 		if err != nil {
+			if errors.Is(err, ErrSSEBufferLimit) {
+				return status.Error(codes.ResourceExhausted, "streaming response buffer limit exceeded")
+			}
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
 		if state.protocol.isResponseOnly() {
@@ -229,6 +241,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		if kind == envoyResponseBody && state.protocol.isStreamingResponse() {
 			response, terminal, adaptErr := s.processWindowedResponse(ctx, state, request)
 			if adaptErr != nil {
+				if errors.Is(adaptErr, ErrSSEBufferLimit) {
+					return status.Error(codes.ResourceExhausted, "streaming response buffer limit exceeded")
+				}
 				return status.Error(codes.Internal, adaptErr.Error())
 			}
 			if !message.GetObservabilityMode() {
@@ -313,7 +328,10 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 		response, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow})
 		return response, false, err
 	}
-	events, emit, ready := state.protocol.takeWindow(request.EndOfStream)
+	events, emit, ready, windowErr := state.protocol.takeWindow(request.EndOfStream)
+	if windowErr != nil {
+		return nil, true, windowErr
+	}
 	if !ready {
 		response, err := responseToEnvoy(envoyResponseBody, StageResponse, ProcessingResult{Action: ActionAllow, Body: []byte{}})
 		return response, false, err

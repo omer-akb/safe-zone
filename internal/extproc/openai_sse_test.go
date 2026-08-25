@@ -71,6 +71,17 @@ func TestOpenAISSEParserReturnsSafeErrors(t *testing.T) {
 	})
 }
 
+func TestOpenAISSEParserEnforcesConfiguredBufferLimit(t *testing.T) {
+	parser := NewOpenAISSEParser(16)
+	_, err := parser.Feed([]byte("data: this line is too long"))
+	if !errors.Is(err, ErrSSEBufferLimit) {
+		t.Fatalf("Feed() error = %v, want ErrSSEBufferLimit", err)
+	}
+	if err.Error() != ErrSSEBufferLimit.Error() {
+		t.Fatalf("Feed() error = %q, must not contain SSE data", err)
+	}
+}
+
 func TestOpenAISSEEventWithDeltaContentsRewritesOnlyDelta(t *testing.T) {
 	parser := &OpenAISSEParser{}
 	events, err := parser.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"secret\"},\"index\":0}]}\n\n"))

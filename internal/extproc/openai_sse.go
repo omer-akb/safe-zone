@@ -13,6 +13,9 @@ var (
 	// ErrIncompleteSSEEvent is returned when Envoy signals end-of-stream while
 	// an SSE line or event is still incomplete.
 	ErrIncompleteSSEEvent = errors.New("incomplete OpenAI SSE event")
+	// ErrSSEBufferLimit prevents malformed or unusually large SSE events from
+	// retaining unbounded parser/window state for a stream.
+	ErrSSEBufferLimit = errors.New("OpenAI SSE buffer limit exceeded")
 )
 
 // SSEParseError identifies a malformed SSE event without retaining its data.
@@ -42,10 +45,18 @@ type OpenAISSEEvent struct {
 // ext_proc response-body chunks. It is owned by one response stream and is not
 // safe for concurrent use.
 type OpenAISSEParser struct {
-	pendingLine string
-	dataLines   []string
-	eventOpen   bool
-	rawEvent    strings.Builder
+	pendingLine    string
+	dataLines      []string
+	eventOpen      bool
+	rawEvent       strings.Builder
+	maxBufferBytes int
+}
+
+// NewOpenAISSEParser creates a parser with a per-event buffer ceiling. A
+// non-positive value keeps the parser useful for callers that do not need a
+// limit; production ext-proc streams always set one.
+func NewOpenAISSEParser(maxBufferBytes int) *OpenAISSEParser {
+	return &OpenAISSEParser{maxBufferBytes: maxBufferBytes}
 }
 
 // Feed consumes a response-body chunk and returns each complete SSE event it
@@ -60,6 +71,9 @@ func (p *OpenAISSEParser) Feed(chunk []byte) ([]OpenAISSEEvent, error) {
 	for {
 		newline := strings.IndexByte(p.pendingLine, '\n')
 		if newline < 0 {
+			if p.maxBufferBytes > 0 && p.rawEvent.Len()+len(p.pendingLine) > p.maxBufferBytes {
+				return nil, &SSEParseError{Err: ErrSSEBufferLimit}
+			}
 			return events, nil
 		}
 		rawLine := p.pendingLine[:newline+1]
@@ -91,6 +105,9 @@ func (p *OpenAISSEParser) consumeLine(line, rawLine string) (OpenAISSEEvent, boo
 			return OpenAISSEEvent{}, false, nil
 		}
 		p.rawEvent.WriteString(rawLine)
+		if p.maxBufferBytes > 0 && p.rawEvent.Len() > p.maxBufferBytes {
+			return OpenAISSEEvent{}, false, &SSEParseError{Err: ErrSSEBufferLimit}
+		}
 		if len(p.dataLines) == 0 {
 			event := OpenAISSEEvent{Raw: []byte(p.rawEvent.String())}
 			p.rawEvent.Reset()
@@ -106,6 +123,9 @@ func (p *OpenAISSEParser) consumeLine(line, rawLine string) (OpenAISSEEvent, boo
 
 	p.eventOpen = true
 	p.rawEvent.WriteString(rawLine)
+	if p.maxBufferBytes > 0 && p.rawEvent.Len() > p.maxBufferBytes {
+		return OpenAISSEEvent{}, false, &SSEParseError{Err: ErrSSEBufferLimit}
+	}
 	if strings.HasPrefix(line, ":") { // SSE comment / keepalive
 		return OpenAISSEEvent{}, false, nil
 	}
