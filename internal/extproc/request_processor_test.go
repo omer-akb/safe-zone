@@ -49,6 +49,54 @@ func TestOpenAIRequestProcessorMasksOnlyUserContentAndUpdatesLength(t *testing.T
 	}
 }
 
+func TestOpenAIRequestProcessorMasksStreamingWindow(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if input.Text == "secret@example.test" {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	parser := &OpenAISSEParser{}
+	events, err := parser.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"secret@example.test\"}}]}\n\ndata: [DONE]\n\n"))
+	if err != nil {
+		t.Fatalf("parse SSE: %v", err)
+	}
+	result, mutated, err := processor.ProcessSSEWindow(context.Background(), ProcessingRequest{RID: "rid", EnvoyReqID: "envoy", Stage: StageResponse, PolicyID: "default", PolicyVersion: 1, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: policy.PolicyDefinition{Response: policy.ResponsePolicy{Enabled: true, PII: policy.ActionMask, Secret: policy.ActionMask, UnsafeContent: policy.ActionMask}}}}, events)
+	if err != nil {
+		t.Fatalf("ProcessSSEWindow() error = %v", err)
+	}
+	if result.Action != ActionMask || result.DetectionCount != 1 || !strings.Contains(string(mutated[0].Raw), "[MASKED]") || !mutated[1].Done {
+		t.Fatalf("window result = %+v, events = %+v", result, mutated)
+	}
+}
+
+func TestOpenAIRequestProcessorStreamingWindowUsesCrossEventContext(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if input.Text != "secret@example.test" {
+			t.Fatalf("Inspect text = %q, want concatenated SSE deltas", input.Text)
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	parser := &OpenAISSEParser{}
+	events, err := parser.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"secret@\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"example.test\"}}]}\n\n"))
+	if err != nil {
+		t.Fatalf("parse SSE: %v", err)
+	}
+	_, mutated, err := processor.ProcessSSEWindow(context.Background(), ProcessingRequest{Stage: StageResponse, PolicySnapshot: &policy.CompiledSnapshot{Definition: policy.PolicyDefinition{Response: policy.ResponsePolicy{Enabled: true, PII: policy.ActionMask, Secret: policy.ActionMask, UnsafeContent: policy.ActionMask}}}}, events)
+	if err != nil {
+		t.Fatalf("ProcessSSEWindow() error = %v", err)
+	}
+	if !strings.Contains(string(mutated[0].Raw), "[MASKED]") || strings.Contains(string(mutated[1].Raw), "example.test") {
+		t.Fatalf("cross-event mutation = %q %q", mutated[0].Raw, mutated[1].Raw)
+	}
+}
+
 func TestOpenAIRequestProcessorUsesStrongestActionWithoutMutatingAuditOrBlock(t *testing.T) {
 	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
 		switch input.Text {

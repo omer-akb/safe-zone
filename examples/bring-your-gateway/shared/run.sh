@@ -4,12 +4,53 @@
 # values.
 set -euo pipefail
 
-example_dir="${1:?usage: ./run.sh <example-directory>}"
+example_dir="${1:?usage: ./run.sh <example-directory> [--response-mode buffered|streamed]}"
+shift
 shared_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${shared_dir}/../../.." && pwd)"
 namespace="tsz-byg-demo"
 kubeconfig="${TSZ_BYG_KUBECONFIG:-${TMPDIR:-/tmp}/tsz-byg-tools/tsz-byg.kubeconfig}"
+[[ -d "${example_dir}" ]] || { echo "example directory does not exist: ${example_dir}" >&2; exit 2; }
+for required_file in expected-status policy.json request.json; do
+  [[ -f "${example_dir}/${required_file}" ]] || {
+    echo "example is missing required file: ${example_dir}/${required_file}" >&2
+    exit 2
+  }
+done
 expected_status="$(<"${example_dir}/expected-status")"
+[[ "${expected_status}" =~ ^[1-5][0-9][0-9]$ ]] || {
+  echo "expected-status must contain one HTTP status code: ${example_dir}/expected-status" >&2
+  exit 2
+}
+response_mode="buffered"
+if [[ -f "${example_dir}/response-body-mode" ]]; then
+  response_mode="$(<"${example_dir}/response-body-mode")"
+fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --response-mode)
+      [[ $# -ge 2 ]] || { echo "--response-mode requires buffered or streamed" >&2; exit 2; }
+      response_mode="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+case "${response_mode}" in
+  buffered)
+    extension_policy="${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml"
+    ;;
+  streamed)
+    extension_policy="${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy-streamed.yaml"
+    ;;
+  *)
+    echo "response mode must be buffered or streamed, got ${response_mode}" >&2
+    exit 2
+    ;;
+esac
 # A prior interrupted run can leave a kubectl port-forward process alive.
 # Per-run ports keep a retry from colliding with that process.
 port_base="${TSZ_BYG_EXAMPLE_PORT_BASE:-$((20000 + ($$ % 10000)))}"
@@ -42,11 +83,6 @@ wait_for_policy_accepted() {
 
   echo "Timed out waiting for ${resource} Accepted=True" >&2
   return 1
-}
-
-[[ -f "${example_dir}/policy.json" && -f "${example_dir}/request.json" ]] || {
-  echo "example must contain policy.json and request.json" >&2
-  exit 2
 }
 
 if [[ "${TSZ_BYG_SKIP_BOOTSTRAP:-0}" != "1" ]]; then
@@ -111,7 +147,7 @@ kubectl -n "${namespace}" wait --for=condition=complete "job/${name}" --timeout=
 # rather than racing its periodic policy-cache reconciliation.
 kubectl -n "${namespace}" set env deployment/tsz-ext-proc TSZ_POLICY_RESOLUTION_MODE=header
 kubectl -n "${namespace}" rollout status deployment/tsz-ext-proc --timeout=90s
-kubectl apply -f "${repo_root}/deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml"
+kubectl apply -f "${extension_policy}"
 wait_for_policy_accepted envoyextensionpolicy/tsz-request-guardrail
 wait_for_policy_accepted clienttrafficpolicy/tsz-route-policy-identity
 if [[ -f "${example_dir}/resources.yaml" ]]; then
@@ -128,7 +164,15 @@ fi
 # inspection mock. The mock never retains raw request content.
 kubectl -n "${namespace}" set image deployment/mock-openai nginx=thyris-sz:local
 kubectl -n "${namespace}" patch deployment/mock-openai --type=strategic -p \
-  '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","command":["/app/byg-mock-openai"],"volumeMounts":null}]}}}}'
+  '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","command":["/app/byg-mock-openai"],"volumeMounts":[{"name":"tsz-mock-response-fixture","mountPath":"/fixtures","readOnly":true}]}],"volumes":[{"name":"tsz-mock-response-fixture","configMap":{"name":"tsz-mock-response-fixture"}}]}}}}'
+kubectl -n "${namespace}" delete configmap tsz-mock-response-fixture --ignore-not-found
+if [[ -f "${example_dir}/mock-sse-fixture" ]]; then
+  kubectl -n "${namespace}" create configmap tsz-mock-response-fixture --from-file=response.sse="${example_dir}/mock-sse-fixture"
+  kubectl -n "${namespace}" set env deployment/mock-openai BYG_MOCK_RESPONSE_MODE=sse BYG_MOCK_SSE_FIXTURE=/fixtures/response.sse
+else
+  kubectl -n "${namespace}" create configmap tsz-mock-response-fixture --from-literal=.keep=
+  kubectl -n "${namespace}" set env deployment/mock-openai BYG_MOCK_RESPONSE_MODE- BYG_MOCK_SSE_FIXTURE-
+fi
 if [[ -f "${example_dir}/mock-response-content" ]]; then
   kubectl -n "${namespace}" set env deployment/mock-openai "BYG_MOCK_RESPONSE_CONTENT=$(<"${example_dir}/mock-response-content")"
 else
@@ -176,7 +220,8 @@ if [[ -f "${example_dir}/jwt-token" ]]; then
   [[ "${invalid_token_status}" == "403" ]] || { echo "invalid JWT returned HTTP ${invalid_token_status}, want 403" >&2; exit 1; }
   curl_auth_args=(--header "authorization: Bearer $(<"${example_dir}/jwt-token")")
 fi
-status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http_code}' \
+response_file="${work_dir}/response.body"
+status="$(curl --silent --output "${response_file}" --write-out '%{http_code}' \
   --header 'content-type: application/json' \
   --header 'X-TSZ-Policy: client-must-not-win' \
   "${curl_auth_args[@]+"${curl_auth_args[@]}"}" \
@@ -188,22 +233,38 @@ status="$(curl --silent --output "${work_dir}/response.json" --write-out '%{http
   exit 1
 }
 if [[ "${status}" == "400" || "${status}" == "403" ]]; then
-  grep -Fq '"policy_id":"default"' "${work_dir}/response.json" || {
+  grep -Fq '"policy_id":"default"' "${response_file}" || {
     echo "block response did not identify the route-owned default policy" >&2; exit 1;
   }
 else
-  grep -Fq 'chatcmpl-kind-mock' "${work_dir}/response.json" || {
-    echo "unexpected mock upstream response" >&2; exit 1;
-  }
+  if [[ -f "${example_dir}/mock-sse-fixture" ]]; then
+    grep -Fq 'data: [DONE]' "${response_file}" || { echo "stream did not terminate with [DONE]" >&2; exit 1; }
+  else
+    grep -Fq 'chatcmpl-kind-mock' "${response_file}" || {
+      echo "unexpected mock upstream response" >&2; exit 1;
+    }
+  fi
 fi
 if [[ -f "${example_dir}/expect-response-mask" || -f "${example_dir}/expect-response-absent" ]]; then
 	raw_response="$(<"${example_dir}/mock-response-content")"
-	! grep -Fq "$raw_response" "${work_dir}/response.json" || { echo "raw upstream response reached client" >&2; exit 1; }
+	! grep -Fq "$raw_response" "${response_file}" || { echo "raw upstream response reached client" >&2; exit 1; }
 fi
 if [[ -f "${example_dir}/expect-response-block" ]]; then
-	grep -Fq '"code":"TSZ_RESPONSE_GUARDRAIL_BLOCKED"' "${work_dir}/response.json" || {
+	grep -Fq '"code":"TSZ_RESPONSE_GUARDRAIL_BLOCKED"' "${response_file}" || {
 		echo "response block did not return the safe TSZ error code" >&2; exit 1;
 	}
+fi
+if [[ -f "${example_dir}/expect-sse-absent" ]]; then
+  while IFS= read -r absent || [[ -n "${absent}" ]]; do
+    [[ -z "${absent}" ]] && continue
+    ! grep -Fq "${absent}" "${response_file}" || { echo "unsafe SSE value reached client" >&2; exit 1; }
+  done <"${example_dir}/expect-sse-absent"
+fi
+if [[ -f "${example_dir}/expect-sse-present" ]]; then
+  while IFS= read -r present || [[ -n "${present}" ]]; do
+    [[ -z "${present}" ]] && continue
+    grep -Fq "${present}" "${response_file}" || { echo "expected SSE value missing from client response" >&2; exit 1; }
+  done <"${example_dir}/expect-sse-present"
 fi
 if [[ -f "${example_dir}/rate-limit-requests" ]]; then
   rate_limit_requests="$(<"${example_dir}/rate-limit-requests")"
@@ -240,6 +301,11 @@ elif [[ "${status}" == "400" || "${status}" == "403" ]]; then
 	[[ "${before_sequence}" == "${after_sequence}" ]] || {
 		echo "blocked request reached the mock upstream" >&2; exit 1;
 	}
+fi
+if [[ -f "${example_dir}/mock-sse-fixture" ]]; then
+  [[ "${before_sequence}" != "${after_sequence}" ]] || {
+    echo "streaming example did not reach the mock upstream" >&2; exit 1;
+  }
 fi
 if [[ "$(basename "${example_dir}")" == "02-request-masking" || -f "${example_dir}/expect-mask" ]]; then
   [[ "$(jq -r '.masked' <<<"${after}")" == "true" ]] || {

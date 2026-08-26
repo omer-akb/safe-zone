@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"sort"
 	"strings"
 
@@ -63,6 +64,17 @@ type envoyStreamState struct {
 	responseBodySeen    bool
 	responseEnded       bool
 	responseOnly        bool
+	responseStreaming   bool
+	responseSSE         *OpenAISSEParser
+	windowedResponse    *sseWindow
+	completedSSEEvents  []OpenAISSEEvent
+	streamBufferLimit   int
+}
+
+func (state *envoyStreamState) setStreamBufferLimit(limit int) {
+	if limit > 0 {
+		state.streamBufferLimit = limit
+	}
 }
 
 func newEnvoyStreamState() *envoyStreamState {
@@ -89,7 +101,9 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.request.headers = CloneHeaders(headers)
 		state.requestHeadersSeen = true
 		state.requestEnded = typed.RequestHeaders.GetEndOfStream()
-		return contractRequest(StageRequest, headers, nil, attributes), envoyRequestHeaders, nil
+		request := contractRequest(StageRequest, headers, nil, attributes)
+		request.EndOfStream = typed.RequestHeaders.GetEndOfStream()
+		return request, envoyRequestHeaders, nil
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
 		if state.responseHeadersSeen || (state.requestHeadersSeen && !state.requestEnded) {
 			return ProcessingRequest{}, "", errors.New("response headers require a completed request and may appear only once")
@@ -102,21 +116,43 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.response.headers = CloneHeaders(headers)
 		state.responseHeadersSeen = true
 		state.responseEnded = typed.ResponseHeaders.GetEndOfStream()
-		return contractRequest(StageResponse, headers, nil, attributes), envoyResponseHeaders, nil
+		state.responseStreaming = isSSEContentType(FirstHeader(headers, "content-type"))
+		if state.responseStreaming {
+			state.responseSSE = NewOpenAISSEParser(state.streamBufferLimit)
+		}
+		request := contractRequest(StageResponse, headers, nil, attributes)
+		request.EndOfStream = typed.ResponseHeaders.GetEndOfStream()
+		return request, envoyResponseHeaders, nil
 	case *extprocv3.ProcessingRequest_RequestBody:
 		if !state.requestHeadersSeen || state.requestEnded || state.requestBodySeen {
 			return ProcessingRequest{}, "", errors.New("request body requires request headers and may appear only once before end of stream")
 		}
 		state.requestBodySeen = true
 		state.requestEnded = typed.RequestBody.GetEndOfStream()
-		return contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes), envoyRequestBody, nil
+		request := contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes)
+		request.EndOfStream = typed.RequestBody.GetEndOfStream()
+		return request, envoyRequestBody, nil
 	case *extprocv3.ProcessingRequest_ResponseBody:
-		if !state.responseHeadersSeen || state.responseEnded || state.responseBodySeen {
-			return ProcessingRequest{}, "", errors.New("response body requires response headers and may appear only once before end of stream")
+		if !state.responseHeadersSeen || state.responseEnded || (state.responseBodySeen && !state.responseStreaming) {
+			return ProcessingRequest{}, "", errors.New("response body requires response headers and may appear once for buffered bodies or repeatedly for streaming bodies before end of stream")
 		}
 		state.responseBodySeen = true
 		state.responseEnded = typed.ResponseBody.GetEndOfStream()
-		return contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes), envoyResponseBody, nil
+		if state.responseStreaming {
+			events, err := state.responseSSE.Feed(typed.ResponseBody.GetBody())
+			if err != nil {
+				return ProcessingRequest{}, "", fmt.Errorf("parse OpenAI SSE response: %w", err)
+			}
+			state.completedSSEEvents = events
+			if state.responseEnded {
+				if err := state.responseSSE.Finish(); err != nil {
+					return ProcessingRequest{}, "", fmt.Errorf("finish OpenAI SSE response: %w", err)
+				}
+			}
+		}
+		request := contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes)
+		request.EndOfStream = typed.ResponseBody.GetEndOfStream()
+		return request, envoyResponseBody, nil
 	case *extprocv3.ProcessingRequest_RequestTrailers, *extprocv3.ProcessingRequest_ResponseTrailers:
 		return ProcessingRequest{}, "", errors.New("trailer processing is not enabled in Phase 1")
 	default:
@@ -124,8 +160,103 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 	}
 }
 
+func (state *envoyStreamState) enableWindowedResponse(windowBytes int) {
+	if state.responseStreaming && state.windowedResponse == nil {
+		state.windowedResponse = newSSEWindow(windowBytes, 512, state.streamBufferLimit)
+	}
+}
+
+func (state *envoyStreamState) takeWindow(endOfStream bool) ([]OpenAISSEEvent, int, bool, error) {
+	if state.windowedResponse == nil {
+		return nil, 0, false, nil
+	}
+	if err := state.windowedResponse.add(state.completedSSEEvents); err != nil {
+		return nil, 0, false, err
+	}
+	state.completedSSEEvents = nil
+	events, emit, ready := state.windowedResponse.next(endOfStream)
+	return events, emit, ready, nil
+}
+
+// close releases per-stream parser and window references on every Process
+// exit path, including cancellation and malformed protocol sequences.
+func (state *envoyStreamState) close() {
+	if state.windowedResponse != nil {
+		state.windowedResponse.events = nil
+		state.windowedResponse.bytes = 0
+	}
+	state.completedSSEEvents = nil
+	state.responseSSE = nil
+}
+
+type sseWindow struct {
+	events                           []OpenAISSEEvent
+	bytes, target, overlap, maxBytes int
+}
+
+func newSSEWindow(target, overlap, maxBytes int) *sseWindow {
+	if target <= 0 {
+		target = 4096
+	}
+	return &sseWindow{target: target, overlap: overlap, maxBytes: maxBytes}
+}
+func (w *sseWindow) add(events []OpenAISSEEvent) error {
+	for _, event := range events {
+		if w.maxBytes > 0 && len(event.Raw) > w.maxBytes-w.bytes {
+			return ErrSSEBufferLimit
+		}
+		w.events = append(w.events, event)
+		w.bytes += len(event.Raw)
+	}
+	return nil
+}
+func (w *sseWindow) next(end bool) ([]OpenAISSEEvent, int, bool) {
+	if end {
+		events := w.events
+		w.events = nil
+		w.bytes = 0
+		return events, len(events), len(events) > 0
+	}
+	if w.bytes < w.target+w.overlap {
+		return nil, 0, false
+	}
+	keep, keptBytes := 0, 0
+	for index := len(w.events) - 1; index >= 0 && keptBytes < w.overlap; index-- {
+		keep++
+		keptBytes += len(w.events[index].Raw)
+	}
+	emit := len(w.events) - keep
+	if emit == 0 && len(w.events) == 1 {
+		emit, keep, keptBytes = 1, 0, 0
+	}
+	if emit == 0 {
+		return nil, 0, false
+	}
+	events := append([]OpenAISSEEvent(nil), w.events...)
+	w.events = append([]OpenAISSEEvent(nil), w.events[emit:]...)
+	w.bytes = keptBytes
+	return events, emit, true
+}
+
+func encodeSSEEvents(events []OpenAISSEEvent) []byte {
+	var body []byte
+	for _, event := range events {
+		body = append(body, event.Raw...)
+	}
+	return body
+}
+
 func (state *envoyStreamState) isResponseOnly() bool {
 	return state.responseOnly
+}
+
+func (state *envoyStreamState) isStreamingResponse() bool {
+	return state.responseStreaming
+}
+
+func isSSEContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }
 
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {
@@ -272,7 +403,7 @@ func headerMutationToEnvoy(mutations map[string]string) *extprocv3.HeaderMutatio
 func metadataToEnvoy(metadata SafeMetadata) (*structpb.Struct, error) {
 	if metadata.RequestID == "" && metadata.RID == "" && metadata.PolicyID == "" && metadata.PolicyVersion == 0 &&
 		metadata.Adapter == "" && metadata.Stage == "" && metadata.Action == "" && len(metadata.Categories) == 0 &&
-		metadata.DetectionCount == 0 && metadata.ProcessorLatencyMS == 0 {
+		metadata.DetectionCount == 0 && metadata.ProcessorLatencyMS == 0 && !metadata.Degraded {
 		return nil, nil
 	}
 	categories := make([]any, len(metadata.Categories))
@@ -286,6 +417,7 @@ func metadataToEnvoy(metadata SafeMetadata) (*structpb.Struct, error) {
 			"adapter": metadata.Adapter, "stage": string(metadata.Stage), "action": string(metadata.Action),
 			"categories": categories, "detection_count": metadata.DetectionCount,
 			"processor_latency_ms": metadata.ProcessorLatencyMS,
+			"degraded":             metadata.Degraded,
 		},
 	})
 	if err != nil {

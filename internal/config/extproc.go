@@ -15,12 +15,17 @@ const (
 	defaultExtProcMaxConcurrentStreams            = 100
 	defaultExtProcMaxGRPCMessageBytes             = 4 * 1024 * 1024
 	defaultExtProcMaxBodyBytes                    = 1024 * 1024
+	defaultExtProcMaxStreamBufferBytes            = 256 * 1024
 	defaultExtProcProcessingTimeoutMS             = 2000
 	defaultExtProcPolicyReconcileInterval         = 30 * time.Second
 	defaultExtProcPolicyMaxStaleness              = 5 * time.Minute
 	defaultExtProcPolicyReconcileFailureThreshold = 3
 	defaultExtProcGracefulShutdownTimeout         = 10 * time.Second
 )
+
+// DefaultExtProcProcessingTimeout is also used by legacy AI validation as its
+// bounded fallback budget, keeping the two request-processing paths aligned.
+const DefaultExtProcProcessingTimeout = time.Duration(defaultExtProcProcessingTimeoutMS) * time.Millisecond
 
 type ExtProcFailMode string
 
@@ -39,6 +44,7 @@ type ExtProcConfig struct {
 	MaxConcurrentStreams            uint32
 	MaxGRPCMessageBytes             int
 	MaxBodyBytes                    int64
+	MaxStreamBufferBytes            int
 	ProcessingTimeout               time.Duration
 	PolicyReconcileInterval         time.Duration
 	PolicyMaxStaleness              time.Duration
@@ -90,6 +96,10 @@ func LoadExtProcConfig() (*ExtProcConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxStreamBufferBytes, err := positiveInt("TSZ_MAX_STREAM_BUFFER_BYTES", defaultExtProcMaxStreamBufferBytes)
+	if err != nil {
+		return nil, err
+	}
 	processingTimeoutMS, err := positiveInt64("TSZ_PROCESSING_TIMEOUT_MS", defaultExtProcProcessingTimeoutMS)
 	if err != nil {
 		return nil, err
@@ -125,6 +135,7 @@ func LoadExtProcConfig() (*ExtProcConfig, error) {
 		MaxConcurrentStreams:            uint32(maxStreams),
 		MaxGRPCMessageBytes:             maxGRPCMessageBytes,
 		MaxBodyBytes:                    maxBodyBytes,
+		MaxStreamBufferBytes:            maxStreamBufferBytes,
 		ProcessingTimeout:               time.Duration(processingTimeoutMS) * time.Millisecond,
 		PolicyReconcileInterval:         reconcileInterval,
 		PolicyMaxStaleness:              maxStaleness,

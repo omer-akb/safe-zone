@@ -147,20 +147,20 @@ func TestNativeRouteIdentityUsesEnvoyGatewayRuleIndex(t *testing.T) {
 	}
 }
 
-func TestReconcileRejectsUnsupportedCapability(t *testing.T) {
+func TestReconcileAcceptsWindowedStreamingCapability(t *testing.T) {
 	scheme, _ := controller.NewScheme()
 	object := inlinePolicy("streaming", target("HTTPRoute", gatewayv1.ObjectName("orders"), nil))
-	object.Spec.Streaming = &securityv1alpha1.StreamingSpec{Mode: "Windowed"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithObjects(object).Build()
-	r := NewPolicyAttachmentReconciler(c, staticTargets{}, selector{}, nil, nil, &recordingEnvoy{})
+	object.Spec.Streaming = &securityv1alpha1.StreamingSpec{Enabled: true, Mode: "Windowed", WindowBytes: 4096}
+	object.Spec.Response = &securityv1alpha1.ResponsePolicySpec{Enabled: true, PII: securityv1alpha1.PolicyActionMask, Secret: securityv1alpha1.PolicyActionMask, UnsafeContent: securityv1alpha1.PolicyActionAuditOnly}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithIndex(&securityv1alpha1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(object).Build()
+	envoy := &recordingEnvoy{}
+	target := ResolvedTarget{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{}, SectionOK: true}
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, nil, nil, envoy)
 	if _, err := r.Reconcile(context.Background(), request(object)); err != nil {
 		t.Fatal(err)
 	}
-	got := &securityv1alpha1.TSZGuardrailPolicy{}
-	_ = c.Get(context.Background(), client.ObjectKeyFromObject(object), got)
-	condition := findCondition(got.Status.Conditions, securityv1alpha1.ConditionProgrammed)
-	if condition.Status != metav1.ConditionFalse || condition.Reason != securityv1alpha1.ReasonUnsupportedCapability {
-		t.Fatalf("Programmed = %+v", condition)
+	if envoy.calls != 1 {
+		t.Fatalf("Envoy calls = %d, want 1", envoy.calls)
 	}
 }
 

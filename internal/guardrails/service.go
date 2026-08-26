@@ -328,7 +328,7 @@ func validateCompiled(ctx context.Context, text string, validator CompiledValida
 		if !config.AppConfig.Features.SemanticAnalysisEnabled {
 			return false, errors.New("AI validation is disabled")
 		}
-		return ai.CheckWithAI(text, validator.Rule, validator.ExpectedResponse)
+		return ai.CheckWithAI(ctx, text, validator.Rule, validator.ExpectedResponse)
 	case ValidatorBuiltin:
 		switch strings.ToUpper(validator.Name) {
 		case "JSON":

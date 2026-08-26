@@ -10,6 +10,15 @@ if [[ -n "${example_dir}" ]]; then
   fi
 fi
 kubectl -n tsz-byg-demo delete -f deployments/envoy-gateway/tsz-ext-proc-envoy-extension-policy.yaml --ignore-not-found
+# Streaming fixtures add a ConfigMap volume to the reusable mock deployment.
+# Remove that template mutation before deleting the ConfigMap, otherwise the
+# next buffered example's bootstrap can wait forever for a missing volume.
+if kubectl -n tsz-byg-demo get deployment mock-openai >/dev/null 2>&1; then
+  kubectl -n tsz-byg-demo patch deployment mock-openai --type=strategic -p \
+    '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","volumeMounts":[{"mountPath":"/fixtures","$patch":"delete"}]}],"volumes":[{"name":"tsz-mock-response-fixture","$patch":"delete"}]}}}}'
+  kubectl -n tsz-byg-demo rollout status deployment/mock-openai --timeout=90s
+fi
+kubectl -n tsz-byg-demo delete configmap tsz-mock-response-fixture --ignore-not-found
 # Failure examples enable a local-only fault on the Deployment. Always remove
 # it during cleanup so the next example and the bootstrap health check start
 # from a healthy ext-proc process.

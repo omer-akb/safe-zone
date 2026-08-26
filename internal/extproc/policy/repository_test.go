@@ -58,6 +58,35 @@ func TestValidateDefinitionAllowsDisabledEmptyResponse(t *testing.T) {
 	}
 }
 
+func TestValidateDefinitionRejectsBlockForWindowedStreaming(t *testing.T) {
+	definition := validPolicyDefinition()
+	definition.Streaming = StreamingSettings{Mode: StreamingModeWindowed, WindowBytes: 4096}
+	if err := ValidateDefinition(definition); !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("ValidateDefinition() error = %v, want ErrInvalidDefinition", err)
+	}
+}
+
+func TestValidateDefinitionRejectsStrictStreamingWithoutDowngradingIt(t *testing.T) {
+	definition := validPolicyDefinition()
+	definition.Streaming = StreamingSettings{Mode: "Strict"}
+	err := ValidateDefinition(definition)
+	if !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("ValidateDefinition() error = %v, want ErrInvalidDefinition", err)
+	}
+	if err == nil || err.Error() != "invalid policy definition: strict streaming is unsupported; use buffered non-streaming response enforcement" {
+		t.Fatalf("ValidateDefinition() error = %v, want strict-streaming guidance", err)
+	}
+}
+
+func TestValidateDefinitionAcceptsMaskOnlyWindowedStreaming(t *testing.T) {
+	definition := validPolicyDefinition()
+	definition.Response.Secret = ActionMask
+	definition.Streaming = StreamingSettings{Mode: StreamingModeWindowed, WindowBytes: 4096}
+	if err := ValidateDefinition(definition); err != nil {
+		t.Fatalf("ValidateDefinition() error = %v", err)
+	}
+}
+
 func TestValidateDefinitionRejectsMalformedValidatorReferences(t *testing.T) {
 	tests := []struct {
 		name   string

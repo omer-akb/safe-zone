@@ -243,3 +243,28 @@ jobs:
         env:
           TSZ_BASE_URL: http://localhost:8080
         run: go test ./tests/e2e/...
+
+  byg-example-smoke:
+    name: BYG example smoke tests (Kind)
+    runs-on: ubuntu-latest
+    needs:
+      - unit-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run BYG example smoke suite
+        env:
+          TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
+        run: examples/bring-your-gateway/smoke.sh
+
+      - name: Remove Kind cluster
+        if: always()
+        env:
+          TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
+        run: deployments/envoy-gateway/kind-bootstrap.sh down

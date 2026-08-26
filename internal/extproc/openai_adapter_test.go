@@ -179,7 +179,6 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 		{name: "empty body", ctype: "application/json", body: " \n\t", want: ErrEmptyChatRequestBody, kind: ChatRequestEmptyBody},
 		{name: "invalid JSON", ctype: "application/json", body: `{"messages":[`, want: ErrInvalidChatRequestJSON, kind: ChatRequestInvalidJSON},
 		{name: "Responses API shape", ctype: "application/json", body: `{"input":"not chat completions"}`, want: ErrUnsupportedChatRequest, kind: ChatRequestUnsupportedRequest},
-		{name: "streaming", ctype: "application/json", body: `{"stream":true,"messages":[]}`, want: ErrUnsupportedChatRequest, kind: ChatRequestUnsupportedRequest},
 		{name: "user multimodal array", ctype: "application/json", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user object content", ctype: "application/json", body: `{"messages":[{"role":"user","content":{"text":"no"}}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user missing content", ctype: "application/json", body: `{"messages":[{"role":"user"}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
@@ -195,6 +194,16 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 				t.Fatalf("ParseChatRequest() typed error = %+v, want kind %q", typed, test.kind)
 			}
 		})
+	}
+}
+
+func TestParseChatRequestAcceptsStreamingRequests(t *testing.T) {
+	request, err := ParseChatRequest("application/json", []byte(`{"stream":true,"messages":[{"role":"user","content":"safe"}]}`))
+	if err != nil {
+		t.Fatalf("ParseChatRequest() error = %v", err)
+	}
+	if len(request.UserContents) != 1 || request.UserContents[0].Content != "safe" {
+		t.Fatalf("user contents = %+v", request.UserContents)
 	}
 }
 

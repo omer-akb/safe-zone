@@ -65,11 +65,32 @@ type PolicyDefinition struct {
 	Response      ResponsePolicy    `json:"response"`
 	FailurePolicy FailurePolicy     `json:"failure_policy"`
 	Limits        Limits            `json:"limits"`
+	Streaming     StreamingSettings `json:"streaming,omitempty"`
 	Audit         AuditSettings     `json:"audit"`
 	Telemetry     TelemetrySettings `json:"telemetry"`
 	// TemplateRefs records the immutable template versions resolved into this
 	// compiled snapshot. It is retained for auditability and integrity hashing.
 	TemplateRefs []TemplateReference `json:"template_refs,omitempty"`
+}
+
+// StreamingSettings is part of an immutable snapshot so the selected policy
+// governs the entire response stream, including all response-body chunks.
+type StreamingSettings struct {
+	Mode        string `json:"mode,omitempty"`
+	WindowBytes int    `json:"window_bytes,omitempty"`
+}
+
+const (
+	StreamingModeNone     = "None"
+	StreamingModeWindowed = "Windowed"
+	DefaultWindowBytes    = 4096
+)
+
+func (s StreamingSettings) WindowBytesOrDefault() int {
+	if s.WindowBytes > 0 {
+		return s.WindowBytes
+	}
+	return DefaultWindowBytes
 }
 
 // TemplateReference pins a reusable guardrail template to one immutable

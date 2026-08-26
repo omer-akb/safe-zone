@@ -2,6 +2,7 @@ package envoy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -86,6 +87,55 @@ func TestRequestFromEnvoyHandlesResponseStagesEmptyBodiesAndEndOfStream(t *testi
 	}
 	if !state.requestEnded || !state.responseEnded {
 		t.Fatalf("end-of-stream state was not recorded: %+v", state)
+	}
+}
+
+func TestRequestFromEnvoyParsesChunkedSSEResponseWithoutRunningGuardrails(t *testing.T) {
+	state := newEnvoyStreamState()
+	if _, _, err := requestFromEnvoy(requestHeadersForAdapterTest(false), state); err != nil {
+		t.Fatalf("request headers: %v", err)
+	}
+	if _, _, err := requestFromEnvoy(requestBodyForAdapterTest(nil, true), state); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	headers := responseHeadersForAdapterTest(false)
+	headers.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+	if _, _, err := requestFromEnvoy(headers, state); err != nil {
+		t.Fatalf("response headers: %v", err)
+	}
+	for _, body := range []*extprocv3.ProcessingRequest{
+		responseBodyForAdapterTest([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel"), false),
+		responseBodyForAdapterTest([]byte("lo\"}}]}\n\ndata: [DONE]\n\n"), true),
+	} {
+		if _, kind, err := requestFromEnvoy(body, state); err != nil || kind != envoyResponseBody {
+			t.Fatalf("response body kind=%s error=%v", kind, err)
+		}
+	}
+	if !state.isStreamingResponse() || !state.responseEnded {
+		t.Fatalf("streaming state = %+v", state)
+	}
+}
+
+func TestRequestFromEnvoyRejectsInvalidOrIncompleteSSE(t *testing.T) {
+	for _, body := range [][]byte{
+		[]byte("data: {not-json}\n\n"),
+		[]byte("data: {\"choices\":[]}"),
+	} {
+		state := newEnvoyStreamState()
+		if _, _, err := requestFromEnvoy(requestHeadersForAdapterTest(false), state); err != nil {
+			t.Fatalf("request headers: %v", err)
+		}
+		if _, _, err := requestFromEnvoy(requestBodyForAdapterTest(nil, true), state); err != nil {
+			t.Fatalf("request body: %v", err)
+		}
+		headers := responseHeadersForAdapterTest(false)
+		headers.GetResponseHeaders().Headers.Headers[0].RawValue = []byte("text/event-stream")
+		if _, _, err := requestFromEnvoy(headers, state); err != nil {
+			t.Fatalf("response headers: %v", err)
+		}
+		if _, _, err := requestFromEnvoy(responseBodyForAdapterTest(body, true), state); err == nil {
+			t.Fatalf("response body %q unexpectedly succeeded", body)
+		}
 	}
 }
 
@@ -300,6 +350,26 @@ func testHeaderMap(values ...[2]string) *corev3.HeaderMap {
 		result.Headers = append(result.Headers, &corev3.HeaderValue{Key: value[0], RawValue: []byte(value[1])})
 	}
 	return result
+}
+
+func TestSSEWindowKeepsEventAtomicTrailingOverlap(t *testing.T) {
+	window := newSSEWindow(256, 512, 0)
+	event := func(size int) OpenAISSEEvent { return OpenAISSEEvent{Raw: make([]byte, size)} }
+	window.add([]OpenAISSEEvent{event(300), event(300), event(300)})
+	events, emit, ready := window.next(false)
+	if !ready || emit != 1 || len(events) != 3 {
+		t.Fatalf("next() = (%d events, emit=%d, ready=%t), want 3/1/true", len(events), emit, ready)
+	}
+	if len(window.events) != 2 || window.bytes != 600 {
+		t.Fatalf("retained overlap = %d events / %d bytes, want 2 / 600", len(window.events), window.bytes)
+	}
+}
+
+func TestSSEWindowRejectsBufferOverflow(t *testing.T) {
+	window := newSSEWindow(256, 512, 10)
+	if err := window.add([]OpenAISSEEvent{{Raw: make([]byte, 11)}}); !errors.Is(err, ErrSSEBufferLimit) {
+		t.Fatalf("add() error = %v, want ErrSSEBufferLimit", err)
+	}
 }
 
 // The semantic helpers keep generated Envoy message details out of individual

@@ -237,8 +237,11 @@ spec:
                 - unsafeContent
                 type: object
               streaming:
-                description: StreamingSpec configures streaming enforcement for an
-                  attachment.
+                description: |-
+                  StreamingSpec configures best-effort streaming enforcement for an
+                  attachment. Strict zero-leakage streaming is intentionally unsupported:
+                  routes requiring that guarantee must use buffered, non-streaming response
+                  enforcement.
                 properties:
                   enabled:
                     type: boolean
@@ -247,6 +250,14 @@ spec:
                     - None
                     - Windowed
                     type: string
+                  windowBytes:
+                    default: 4096
+                    description: |-
+                      WindowBytes is the maximum UTF-8 byte size targeted for a Windowed
+                      response window. SSE events are never split to meet this boundary.
+                    format: int32
+                    minimum: 1
+                    type: integer
                 required:
                 - enabled
                 type: object

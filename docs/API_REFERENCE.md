@@ -693,10 +693,12 @@ Gateway API **v1.5.1**. Installation and profile selection are documented in
 
 #### Response contract
 
-Only buffered, non-streaming OpenAI Chat Completions traffic is enforced by
-this adapter. The request must use `Content-Type: application/json`; streaming
-requests and unsupported content shapes are processing failures, not silently
-allowed content.
+For a strict no-leakage guarantee, use this buffered, non-streaming OpenAI
+Chat Completions profile. The request must use `Content-Type: application/json`;
+streaming requests and unsupported content shapes are processing failures, not
+silently allowed content. The separate Envoy BYG `Windowed` SSE mode is
+best-effort only: it cannot retract content that Envoy has already sent and is
+not a strict-streaming substitute.
 
 On the response path TSZ reads every string value at
 `choices[].message.content` where `message.role` is `assistant`. It changes
@@ -732,6 +734,7 @@ The manual attachment requires these fields:
 | --- | --- | --- |
 | `TSZ_FAIL_MODE` | `closed` | Fallback when no policy-specific failure mode is available. |
 | `TSZ_MAX_BODY_BYTES` | `1048576` | Maximum buffered request **and** response body size. |
+| `TSZ_MAX_STREAM_BUFFER_BYTES` | `262144` | Maximum per-stream SSE parser or window buffer. Overflow terminates the ext_proc stream with `RESOURCE_EXHAUSTED`; Envoy's external-processor failure behavior then applies. |
 | `TSZ_MAX_GRPC_MESSAGE_BYTES` | `4194304` | Maximum ext_proc gRPC message size. |
 | `TSZ_PROCESSING_TIMEOUT_MS` | `2000` | TSZ processing deadline for one ext_proc message. |
 | `TSZ_MAX_CONCURRENT_STREAMS` | `100` | Maximum concurrent ext_proc streams per processor replica. |
