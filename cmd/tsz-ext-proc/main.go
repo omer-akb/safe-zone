@@ -88,7 +88,7 @@ func main() {
 		resolver = extproc.AttributePolicyResolver{Mapping: bindings}
 	}
 	metricsRegistry := prometheus.NewRegistry()
-	responseStateMetrics, err := observability.NewResponseStateMetrics(metricsRegistry)
+	extProcMetrics, err := observability.NewExtProcMetrics(metricsRegistry)
 	if err != nil {
 		log.Fatalf("initialize ext-proc metrics: %v", err)
 	}
@@ -96,7 +96,8 @@ func main() {
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
 		MaxStreamBufferBytes:  extProcConfig.MaxStreamBufferBytes,
 		ProcessingTimeout:     extProcConfig.ProcessingTimeout,
-		ResponseStateObserver: responseStateMetrics,
+		ResponseStateObserver: extProcMetrics,
+		MetricsObserver:       extProcMetrics,
 	}, extProcConfig.MaxConcurrentStreams)
 	if err != nil {
 		log.Fatalf("initialize Envoy adapter: %v", err)

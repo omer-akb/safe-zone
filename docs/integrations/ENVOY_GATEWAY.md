@@ -53,6 +53,24 @@ body), the pinned response failure policy applies. Its default closed outcome
 is also TSZ's safe response-stage `403`; it is not a promise to preserve the
 original `429` body.
 
+## Prometheus metrics
+
+`tsz-ext-proc` exposes Prometheus metrics on its existing HTTP health port at
+`GET /metrics`. The deployment manifest names this port `health` (default
+`8080`); expose it only to the Prometheus scraper, not to public traffic.
+
+```bash
+kubectl -n tsz-byg-demo port-forward service/tsz-ext-proc 8080:8080
+curl -s http://127.0.0.1:8080/metrics | grep '^tsz_extproc_'
+```
+
+The processor emits transaction, decision, detection-category, processing
+duration, bounded failure-reason, timeout, body-size, active-stream, and
+stream-halt metrics. `action`, `stage`, `policy`, `type`, `direction`, and
+`reason` are the only labels. RID, Envoy request IDs, tenant/user identifiers,
+request bodies, raw PII, credentials, and error text are never labels or
+metric values.
+
 ## Preview / portable installation
 
 Use this profile when the gateway integration is managed manually or the

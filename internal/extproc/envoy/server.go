@@ -54,6 +54,7 @@ type Server struct {
 	maxStreamBufferBytes  int
 	processingTimeout     time.Duration
 	responseStateObserver ResponseStateObserver
+	metricsObserver       MetricsObserver
 	operationalAudits     chan guardrails.AuditEvent
 	operationalStop       context.CancelFunc
 	operationalWorkers    sync.WaitGroup
@@ -70,6 +71,36 @@ type noopResponseStateObserver struct{}
 
 func (noopResponseStateObserver) ObserveResponseWithoutRequestState(string) {}
 
+// MetricsObserver records only aggregate, PII-safe operational data. All
+// parameters are bounded enums or policy IDs controlled by the operator.
+type MetricsObserver interface {
+	IncRequest()
+	IncResponse()
+	ObserveAction(Action, ProcessingStage, string)
+	ObserveDetections([]string, ProcessingStage)
+	ObserveDuration(ProcessingStage, float64)
+	IncFailure(string)
+	IncTimeout()
+	ObserveBodyBytes(string, int)
+	IncActiveStreams()
+	DecActiveStreams()
+	IncStreamHalt()
+}
+
+type noopMetricsObserver struct{}
+
+func (noopMetricsObserver) IncRequest()                                   {}
+func (noopMetricsObserver) IncResponse()                                  {}
+func (noopMetricsObserver) ObserveAction(Action, ProcessingStage, string) {}
+func (noopMetricsObserver) ObserveDetections([]string, ProcessingStage)   {}
+func (noopMetricsObserver) ObserveDuration(ProcessingStage, float64)      {}
+func (noopMetricsObserver) IncFailure(string)                             {}
+func (noopMetricsObserver) IncTimeout()                                   {}
+func (noopMetricsObserver) ObserveBodyBytes(string, int)                  {}
+func (noopMetricsObserver) IncActiveStreams()                             {}
+func (noopMetricsObserver) DecActiveStreams()                             {}
+func (noopMetricsObserver) IncStreamHalt()                                {}
+
 // Register binds this Envoy-specific adapter to a generic gRPC server.
 func (s *Server) Register(server *grpc.Server) {
 	extprocv3.RegisterExternalProcessorServer(server, s)
@@ -84,6 +115,7 @@ type ServerSettings struct {
 	MaxStreamBufferBytes  int
 	ProcessingTimeout     time.Duration
 	ResponseStateObserver ResponseStateObserver
+	MetricsObserver       MetricsObserver
 }
 
 func defaultServerSettings() ServerSettings {
@@ -149,6 +181,9 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 	if settings.ResponseStateObserver == nil {
 		settings.ResponseStateObserver = noopResponseStateObserver{}
 	}
+	if settings.MetricsObserver == nil {
+		settings.MetricsObserver = noopMetricsObserver{}
+	}
 	server := &Server{
 		processor:          processor,
 		policyCache:        policyCache,
@@ -157,6 +192,7 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 		streamPermit:       make(chan struct{}, limit),
 		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, maxStreamBufferBytes: settings.MaxStreamBufferBytes, processingTimeout: settings.ProcessingTimeout,
 		responseStateObserver: settings.ResponseStateObserver,
+		metricsObserver:       settings.MetricsObserver,
 		operationalAudits:     make(chan guardrails.AuditEvent, 100),
 	}
 	operationalCtx, cancelOperational := context.WithCancel(context.Background())
@@ -183,6 +219,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		return err
 	}
 	defer func() { <-s.streamPermit }()
+	s.metricsObserver.IncActiveStreams()
+	defer s.metricsObserver.DecActiveStreams()
 
 	state := newStreamState()
 	state.protocol.setStreamBufferLimit(s.maxStreamBufferBytes)
@@ -205,15 +243,28 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 		request, kind, err := requestFromEnvoy(message, state.protocol)
 		if err != nil {
+			s.metricsObserver.IncFailure("protocol")
 			if errors.Is(err, ErrSSEBufferLimit) {
+				s.metricsObserver.IncFailure("stream_buffer")
 				return status.Error(codes.ResourceExhausted, "streaming response buffer limit exceeded")
 			}
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
+		if kind == envoyRequestHeaders {
+			s.metricsObserver.IncRequest()
+		}
+		if kind == envoyResponseHeaders {
+			s.metricsObserver.IncResponse()
+		}
+		if len(request.Body) > 0 {
+			s.metricsObserver.ObserveBodyBytes(string(request.Stage), len(request.Body))
+		}
 		if state.protocol.isResponseOnly() {
 			result, terminal := s.responseOnlyResult(ctx, state, request)
+			s.observeDecision(request, result, 0)
 			response, err := responseToEnvoy(kind, request.Stage, result)
 			if err != nil {
+				s.metricsObserver.IncFailure("policy_resolution")
 				return status.Error(codes.Internal, fmt.Sprintf("adapt response-only %s response: %v", kind, err))
 			}
 			if !message.GetObservabilityMode() {
@@ -251,8 +302,10 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			state.protocol.enableWindowedResponse(state.policySnapshot.Definition.Streaming.WindowBytesOrDefault())
 		}
 		if immediateStatus, exceeded := bodyLimitStatus(kind, request.Headers, request.Body, s.maxBodyBytes); exceeded {
+			s.metricsObserver.IncFailure("body_limit")
 			result := ProcessingResult{Action: ActionBlock, ImmediateStatus: immediateStatus}
 			enrichResultIdentity(&result, request, kind, 0)
+			s.observeDecision(request, result, 0)
 			response, adaptErr := responseToEnvoy(kind, request.Stage, result)
 			if adaptErr != nil {
 				return status.Error(codes.Internal, adaptErr.Error())
@@ -291,6 +344,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				goto processRequest
 			}
 			enrichResultIdentity(&result, request, kind, 0)
+			s.metricsObserver.IncFailure("policy_resolution")
+			s.observeDecision(request, result, 0)
 			_ = s.auditRequest(ctx, request, result)
 			response, adaptErr := responseToEnvoy(kind, request.Stage, result)
 			if adaptErr != nil {
@@ -305,6 +360,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		started := time.Now()
 		processingCtx, cancel := context.WithTimeout(ctx, s.processingTimeout)
 		result, err := s.processor.Process(processingCtx, request)
+		processingErr := processingCtx.Err()
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -313,6 +369,12 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			// A processor/validator deadline belongs to the BYG request budget,
 			// so it is handled by the stream-pinned failure policy rather than
 			// surfaced as an unclassified gRPC error.
+			if errors.Is(processingErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+				s.metricsObserver.IncTimeout()
+				s.metricsObserver.IncFailure("timeout")
+			} else {
+				s.metricsObserver.IncFailure("processor")
+			}
 			result = s.failureResult(request)
 		}
 		if !state.hasPolicySnapshot {
@@ -323,6 +385,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		}
 		enrichResultIdentity(&result, request, kind, time.Since(started))
 		if err := s.auditRequest(ctx, request, result); err != nil {
+			s.metricsObserver.IncFailure("audit")
 			// Audit sink failure must not expose or alter request content. The
 			// request failure policy decides whether the already-made enforcement
 			// decision can proceed in degraded mode.
@@ -334,6 +397,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				result.Metadata.Action = ActionBlock
 			}
 		}
+		s.observeDecision(request, result, time.Since(started))
 		response, err := responseToEnvoy(kind, request.Stage, result)
 		if err != nil {
 			return status.Error(codes.Internal, fmt.Sprintf("adapt %s response: %v", kind, err))
@@ -367,15 +431,28 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 	if !ok {
 		result := s.failureResult(request)
 		enrichResultIdentity(&result, request, envoyResponseBody, 0)
+		s.metricsObserver.IncFailure("processor")
+		s.observeDecision(request, result, 0)
+		if result.Action == ActionBlock {
+			s.metricsObserver.IncStreamHalt()
+		}
 		response, err := responseToEnvoy(envoyResponseBody, StageResponse, result)
 		return response, result.Action == ActionBlock, err
 	}
+	started := time.Now()
 	processingCtx, cancel := context.WithTimeout(ctx, s.processingTimeout)
 	result, mutated, err := windowProcessor.ProcessSSEWindow(processingCtx, request, events)
+	processingErr := processingCtx.Err()
 	cancel()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, true, status.FromContextError(ctx.Err()).Err()
+		}
+		if errors.Is(processingErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			s.metricsObserver.IncTimeout()
+			s.metricsObserver.IncFailure("timeout")
+		} else {
+			s.metricsObserver.IncFailure("processor")
 		}
 		result = s.failureResult(request)
 		// A fail-open response must pass through the original, event-aligned
@@ -384,13 +461,23 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 		mutated = events
 	}
 	enrichResultIdentity(&result, request, envoyResponseBody, 0)
+	s.observeDecision(request, result, time.Since(started))
 	if result.Action == ActionBlock {
+		s.metricsObserver.IncStreamHalt()
 		response, adaptErr := responseToEnvoy(envoyResponseBody, StageResponse, result)
 		return response, true, adaptErr
 	}
 	result.Body = encodeSSEEvents(mutated[:emit])
 	response, adaptErr := responseToEnvoy(envoyResponseBody, StageResponse, result)
 	return response, false, adaptErr
+}
+
+func (s *Server) observeDecision(request ProcessingRequest, result ProcessingResult, duration time.Duration) {
+	s.metricsObserver.ObserveAction(result.Action, request.Stage, request.PolicyID)
+	s.metricsObserver.ObserveDetections(result.Metadata.Categories, request.Stage)
+	if duration > 0 {
+		s.metricsObserver.ObserveDuration(request.Stage, duration.Seconds())
+	}
 }
 
 func (s *Server) enqueueCancellationAudit(ctx context.Context, state *streamState) {
