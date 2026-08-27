@@ -4,6 +4,50 @@ This guide covers Envoy Gateway v1.8.3 with Gateway API v1.5.1. The checked-in
 Kind example under `deployments/envoy-gateway/` is the reproducible reference
 environment.
 
+## Network isolation
+
+The Kind bootstrap applies the `same-namespace` overlay under
+`deployments/envoy-gateway/kustomize/network-policy/`.
+It selects `tsz-ext-proc` pods, denies all ingress and egress by default, then
+permits only:
+
+- ext_proc gRPC traffic on TCP `9002` from Envoy proxy pods in
+  `envoy-gateway-system` bearing `security.thyris.ai/tsz-peer: "true"`;
+- DNS to CoreDNS on TCP/UDP `53`;
+- PostgreSQL and Redis in the reference namespace on TCP `5432` and `6379`.
+
+The `EnvoyProxy` resource in `echo-demo.yaml` injects the peer label, so the
+policy does not rely on Envoy Gateway implementation labels. This pod-label
+configuration is verified against Envoy Gateway v1.8.3.
+
+The reference deployment intentionally keeps PostgreSQL and Redis in
+`tsz-byg-demo`. Kustomize overlays make the topology explicit:
+
+```bash
+# Current Kind topology
+kubectl kustomize deployments/envoy-gateway/kustomize/network-policy/overlays/same-namespace
+
+# Production topology: processor in tsz-system; PostgreSQL and Redis in tsz-data
+kubectl kustomize deployments/envoy-gateway/kustomize/network-policy/overlays/separate-data-namespace
+```
+
+For another namespace layout, change the `namespace` and `tsz-data` values in
+the separate-data-namespace overlay together; it retains the dependency
+`podSelector` and does not grant namespace-wide egress.
+Keep the HTTP health/metrics port (`8080`) out of the ext_proc ingress rule.
+Expose it separately and only to an authenticated operational or Prometheus
+workload when needed.
+
+NetworkPolicy is an L3/L4 control and does not provide TLS. Production Envoy
+to TSZ traffic must additionally use TLS or mTLS; this reference policy limits
+which workloads may initiate the gRPC connection.
+
+During `kind-bootstrap.sh verify-replica-lifecycle` and
+`verify-controller-reconciliation`, the bootstrap creates two temporary probe
+pods. A pod in `envoy-gateway-system` with the TSZ peer label must connect to
+`tsz-ext-proc:9002`; an unlabeled pod in `tsz-byg-demo` must be rejected. The
+bootstrap fails if either assertion is not true.
+
 ## Choosing an installation profile
 
 | | Preview (manual) | Native (managed) |

@@ -318,10 +318,12 @@ verify_replica_lifecycle() {
   docker build -t thyris-sz:local "${SCRIPT_DIR}/../.."
   "$KIND" load docker-image thyris-sz:local --name "$CLUSTER_NAME"
   kubectl apply -f "${SCRIPT_DIR}/tsz-ext-proc.yaml"
+  kubectl apply -k "${SCRIPT_DIR}/kustomize/network-policy/overlays/same-namespace"
   # The local tag is intentionally stable; restart so a repeated verification
   # always exercises the image just loaded into the Kind node.
   kubectl -n "$DEMO_NAMESPACE" rollout restart deployment/tsz-ext-proc
   kubectl -n "$DEMO_NAMESPACE" rollout status deployment/tsz-ext-proc --timeout=180s
+  verify_network_policy_isolation
 
   # A rolling update can briefly retain a terminating, label-matched old pod.
   # Count only non-terminating Running pods whose every container is Ready,
@@ -361,6 +363,42 @@ verify_replica_lifecycle() {
   done <<<"$pods"
 }
 
+verify_network_policy_isolation() {
+  local allowed_probe="tsz-network-policy-allowed" denied_probe="tsz-network-policy-denied"
+  local ext_proc_address="tsz-ext-proc.${DEMO_NAMESPACE}.svc.cluster.local"
+
+  # Check both branches. The allowed probe has exactly the label injected by
+  # EnvoyProxy into the data-plane pod template; the denied probe has none.
+  # This proves the CNI enforces the policy instead of merely accepting its
+  # YAML syntax.
+  kubectl -n envoy-gateway-system delete pod "$allowed_probe" --ignore-not-found --wait=false
+  kubectl -n "$DEMO_NAMESPACE" delete pod "$denied_probe" --ignore-not-found --wait=false
+  kubectl -n envoy-gateway-system run "$allowed_probe" \
+    --image=busybox:1.37.0 --restart=Never \
+    --labels='security.thyris.ai/tsz-peer=true' \
+    --command -- sleep 120
+  kubectl -n "$DEMO_NAMESPACE" run "$denied_probe" \
+    --image=busybox:1.37.0 --restart=Never \
+    --command -- sleep 120
+
+  cleanup_network_policy_probes() {
+    kubectl -n envoy-gateway-system delete pod "$allowed_probe" --ignore-not-found --wait=false
+    kubectl -n "$DEMO_NAMESPACE" delete pod "$denied_probe" --ignore-not-found --wait=false
+  }
+  trap cleanup_network_policy_probes RETURN
+
+  kubectl -n envoy-gateway-system wait --for=condition=Ready "pod/${allowed_probe}" --timeout=90s
+  kubectl -n "$DEMO_NAMESPACE" wait --for=condition=Ready "pod/${denied_probe}" --timeout=90s
+  kubectl -n envoy-gateway-system exec "$allowed_probe" -- \
+    nc -z -w 3 "$ext_proc_address" 9002 || fail "NetworkPolicy blocked the labeled Envoy peer"
+  if kubectl -n "$DEMO_NAMESPACE" exec "$denied_probe" -- \
+    nc -z -w 3 "$ext_proc_address" 9002; then
+    fail "NetworkPolicy allowed an unlabeled, non-Envoy pod to reach ext_proc"
+  fi
+  cleanup_network_policy_probes
+  trap - RETURN
+}
+
 verify_controller_reconciliation() {
   local envoy_service temp_dir port_forward_pid response_file status_code conflict_a conflict_b
   command -v docker >/dev/null 2>&1 || fail "Docker is required"
@@ -376,10 +414,12 @@ verify_controller_reconciliation() {
   kubectl apply -f "${SCRIPT_DIR}/../../config/crd/bases/security.thyris.ai_tszguardrailpolicies.yaml"
   kubectl apply -f "${SCRIPT_DIR}/../../config/rbac/role.yaml"
   kubectl apply -f "${SCRIPT_DIR}/tsz-ext-proc.yaml"
+  kubectl apply -k "${SCRIPT_DIR}/kustomize/network-policy/overlays/same-namespace"
   kubectl apply -f "${SCRIPT_DIR}/controller/controller.yaml"
   kubectl -n "$DEMO_NAMESPACE" rollout restart deployment/tsz-ext-proc deployment/tsz-controller
   kubectl -n "$DEMO_NAMESPACE" rollout status deployment/tsz-ext-proc --timeout=180s
   kubectl -n "$DEMO_NAMESPACE" rollout status deployment/tsz-controller --timeout=180s
+  verify_network_policy_isolation
 
   # Start clean so a previous run cannot satisfy a wait using stale status.
   kubectl -n "$DEMO_NAMESPACE" delete tszguardrailpolicy \
