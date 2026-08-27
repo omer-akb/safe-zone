@@ -50,7 +50,10 @@ type ProcessingRequest struct {
 	EnvoyReqID string
 	// TraceID remains empty unless a future trusted gateway source supplies it.
 	// Client-controlled trace headers are intentionally not trusted here.
-	TraceID        string
+	TraceID string
+	// TraceParent is accepted only from gateway-configured trusted attributes.
+	// It is used to continue W3C trace context and is never exposed as metadata.
+	TraceParent    string
 	Stage          ProcessingStage
 	Headers        map[string][]string
 	Body           []byte

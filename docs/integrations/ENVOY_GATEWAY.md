@@ -71,6 +71,31 @@ stream-halt metrics. `action`, `stage`, `policy`, `type`, `direction`, and
 request bodies, raw PII, credentials, and error text are never labels or
 metric values.
 
+## OpenTelemetry tracing
+
+Tracing is disabled unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. The endpoint
+uses OTLP/gRPC and TLS by default; set `OTEL_EXPORTER_OTLP_INSECURE=true` only
+for a local trusted collector without TLS.
+
+```yaml
+env:
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: otel-collector.observability.svc.cluster.local:4317
+  - name: OTEL_EXPORTER_OTLP_INSECURE
+    value: "false"
+```
+
+TSZ creates `tsz.extproc.request` and `tsz.extproc.response` spans, child
+`tsz.guardrail.validator` spans, `tsz.semantic_model` spans for AI validators,
+and instrumentation spans for PostgreSQL and Redis operations. A W3C
+`traceparent` is continued only when Envoy supplies it through a configured,
+trusted ext-proc attribute; TSZ does not trust a client header directly.
+
+Safe span attributes include processing stage, policy ID/version, action,
+detection count, degraded state, TSZ RID, and Envoy request ID. Request and
+response bodies, raw PII, credentials, validator text, Redis command
+arguments, and database query variables are never recorded in spans.
+
 ## Preview / portable installation
 
 Use this profile when the gateway integration is managed manually or the

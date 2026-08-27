@@ -25,6 +25,8 @@ import (
 type streamState struct {
 	rid                 string
 	envoyReqID          string
+	traceID             string
+	traceParent         string
 	policyID            string
 	policySnapshot      policy.CompiledSnapshot
 	hasPolicySnapshot   bool
@@ -55,6 +57,7 @@ type Server struct {
 	processingTimeout     time.Duration
 	responseStateObserver ResponseStateObserver
 	metricsObserver       MetricsObserver
+	traceObserver         TraceObserver
 	operationalAudits     chan guardrails.AuditEvent
 	operationalStop       context.CancelFunc
 	operationalWorkers    sync.WaitGroup
@@ -87,6 +90,16 @@ type MetricsObserver interface {
 	IncStreamHalt()
 }
 
+type TraceObserver interface {
+	StartGuardrail(context.Context, ProcessingRequest) (context.Context, func(ProcessingResult, error))
+}
+
+type noopTraceObserver struct{}
+
+func (noopTraceObserver) StartGuardrail(ctx context.Context, _ ProcessingRequest) (context.Context, func(ProcessingResult, error)) {
+	return ctx, func(ProcessingResult, error) {}
+}
+
 type noopMetricsObserver struct{}
 
 func (noopMetricsObserver) IncRequest()                                   {}
@@ -116,6 +129,7 @@ type ServerSettings struct {
 	ProcessingTimeout     time.Duration
 	ResponseStateObserver ResponseStateObserver
 	MetricsObserver       MetricsObserver
+	TraceObserver         TraceObserver
 }
 
 func defaultServerSettings() ServerSettings {
@@ -184,6 +198,9 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 	if settings.MetricsObserver == nil {
 		settings.MetricsObserver = noopMetricsObserver{}
 	}
+	if settings.TraceObserver == nil {
+		settings.TraceObserver = noopTraceObserver{}
+	}
 	server := &Server{
 		processor:          processor,
 		policyCache:        policyCache,
@@ -193,6 +210,7 @@ func newServer(processor Processor, policyCache PolicyCache, resolver PolicyReso
 		defaultFailureMode: settings.FailMode, maxBodyBytes: settings.MaxBodyBytes, maxStreamBufferBytes: settings.MaxStreamBufferBytes, processingTimeout: settings.ProcessingTimeout,
 		responseStateObserver: settings.ResponseStateObserver,
 		metricsObserver:       settings.MetricsObserver,
+		traceObserver:         settings.TraceObserver,
 		operationalAudits:     make(chan guardrails.AuditEvent, 100),
 	}
 	operationalCtx, cancelOperational := context.WithCancel(context.Background())
@@ -359,7 +377,9 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	processRequest:
 		started := time.Now()
 		processingCtx, cancel := context.WithTimeout(ctx, s.processingTimeout)
-		result, err := s.processor.Process(processingCtx, request)
+		tracedCtx, endTrace := s.traceObserver.StartGuardrail(processingCtx, request)
+		result, err := s.processor.Process(tracedCtx, request)
+		endTrace(result, err)
 		processingErr := processingCtx.Err()
 		cancel()
 		if err != nil {
@@ -441,7 +461,9 @@ func (s *Server) processWindowedResponse(ctx context.Context, state *streamState
 	}
 	started := time.Now()
 	processingCtx, cancel := context.WithTimeout(ctx, s.processingTimeout)
-	result, mutated, err := windowProcessor.ProcessSSEWindow(processingCtx, request, events)
+	tracedCtx, endTrace := s.traceObserver.StartGuardrail(processingCtx, request)
+	result, mutated, err := windowProcessor.ProcessSSEWindow(tracedCtx, request, events)
+	endTrace(result, err)
 	processingErr := processingCtx.Err()
 	cancel()
 	if err != nil {
@@ -590,6 +612,8 @@ func (state *streamState) pinPolicy(request ProcessingRequest, cache PolicyCache
 	state.requestFailureMode = defaultMode
 	state.responseFailureMode = defaultMode
 	state.envoyReqID = request.EnvoyReqID
+	state.traceID = request.TraceID
+	state.traceParent = request.TraceParent
 	state.policyID = strings.TrimSpace(request.PolicyID)
 	if state.policyID == "" {
 		return
@@ -690,6 +714,8 @@ func (s *Server) auditRequest(ctx context.Context, request ProcessingRequest, re
 func (state *streamState) apply(request *ProcessingRequest) {
 	request.RID = state.rid
 	request.EnvoyReqID = state.envoyReqID
+	request.TraceID = state.traceID
+	request.TraceParent = state.traceParent
 	request.PolicyID = state.policyID
 	request.FailureMode = state.failureModeFor(request.Stage)
 	if !state.hasPolicySnapshot {

@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"thyris-sz/internal/ai"
 	"thyris-sz/internal/config"
 	"thyris-sz/internal/models"
@@ -328,7 +331,15 @@ func validateCompiled(ctx context.Context, text string, validator CompiledValida
 		if !config.AppConfig.Features.SemanticAnalysisEnabled {
 			return false, errors.New("AI validation is disabled")
 		}
-		return ai.CheckWithAI(ctx, text, validator.Rule, validator.ExpectedResponse)
+		ctx, span := otel.Tracer("thyris-sz/guardrails").Start(ctx, "tsz.semantic_model")
+		defer span.End()
+		span.SetAttributes(attribute.String("tsz.validator.kind", string(validator.Kind)))
+		passed, err := ai.CheckWithAI(ctx, text, validator.Rule, validator.ExpectedResponse)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "semantic validation failed")
+		}
+		return passed, err
 	case ValidatorBuiltin:
 		switch strings.ToUpper(validator.Name) {
 		case "JSON":

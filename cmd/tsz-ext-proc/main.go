@@ -38,6 +38,22 @@ func main() {
 		log.Fatalf("invalid ext-proc configuration: %v", err)
 	}
 
+	tracingConfig, err := observability.TracingConfigFromEnv()
+	if err != nil {
+		log.Fatalf("invalid OpenTelemetry configuration: %v", err)
+	}
+	tracing, err := observability.NewTracing(context.Background(), tracingConfig)
+	if err != nil {
+		log.Fatalf("initialize OpenTelemetry tracing: %v", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), extProcConfig.GracefulShutdownTimeout)
+		defer cancel()
+		if err := tracing.Shutdown(shutdownContext); err != nil {
+			log.Printf("shutdown OpenTelemetry tracing: %v", err)
+		}
+	}()
+
 	database.InitDB()
 	cache.InitRedis()
 	detector := guardrails.NewDetector()
@@ -98,6 +114,7 @@ func main() {
 		ProcessingTimeout:     extProcConfig.ProcessingTimeout,
 		ResponseStateObserver: extProcMetrics,
 		MetricsObserver:       extProcMetrics,
+		TraceObserver:         tracing,
 	}, extProcConfig.MaxConcurrentStreams)
 	if err != nil {
 		log.Fatalf("initialize Envoy adapter: %v", err)
