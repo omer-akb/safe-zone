@@ -20,6 +20,9 @@ var extProcEnvKeys = []string{
 	"TSZ_POLICY_MAX_STALENESS",
 	"TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD",
 	"TSZ_GRACEFUL_SHUTDOWN_TIMEOUT",
+	"TSZ_GRPC_TLS_CERT_FILE",
+	"TSZ_GRPC_TLS_KEY_FILE",
+	"TSZ_GRPC_TLS_CLIENT_CA_FILE",
 }
 
 func TestLoadExtProcConfigDefaults(t *testing.T) {
@@ -60,6 +63,9 @@ func TestLoadExtProcConfigDefaults(t *testing.T) {
 	if cfg.GracefulShutdownTimeout != 10*time.Second {
 		t.Fatalf("GracefulShutdownTimeout = %s, want 10s", cfg.GracefulShutdownTimeout)
 	}
+	if cfg.GRPCTLSCertFile != "" || cfg.GRPCTLSKeyFile != "" || cfg.GRPCTLSClientCAFile != "" {
+		t.Fatalf("TLS files should be disabled by default: %+v", cfg)
+	}
 }
 
 func TestLoadExtProcConfigOverrides(t *testing.T) {
@@ -76,6 +82,9 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	t.Setenv("TSZ_POLICY_MAX_STALENESS", "8m")
 	t.Setenv("TSZ_POLICY_RECONCILE_FAILURE_THRESHOLD", "7")
 	t.Setenv("TSZ_GRACEFUL_SHUTDOWN_TIMEOUT", "15s")
+	t.Setenv("TSZ_GRPC_TLS_CERT_FILE", "/tls/tls.crt")
+	t.Setenv("TSZ_GRPC_TLS_KEY_FILE", "/tls/tls.key")
+	t.Setenv("TSZ_GRPC_TLS_CLIENT_CA_FILE", "/tls/client-ca.crt")
 
 	cfg, err := LoadExtProcConfig()
 	if err != nil {
@@ -89,6 +98,18 @@ func TestLoadExtProcConfigOverrides(t *testing.T) {
 	}
 	if cfg.ProcessingTimeout != 750*time.Millisecond || cfg.PolicyReconcileInterval != 45*time.Second || cfg.PolicyMaxStaleness != 8*time.Minute || cfg.PolicyReconcileFailureThreshold != 7 || cfg.GracefulShutdownTimeout != 15*time.Second {
 		t.Fatalf("unexpected duration config: %+v", cfg)
+	}
+	if cfg.GRPCTLSCertFile != "/tls/tls.crt" || cfg.GRPCTLSKeyFile != "/tls/tls.key" || cfg.GRPCTLSClientCAFile != "/tls/client-ca.crt" {
+		t.Fatalf("unexpected TLS config: %+v", cfg)
+	}
+}
+
+func TestLoadExtProcConfigRequiresCompleteGRPCMTLSConfiguration(t *testing.T) {
+	clearExtProcEnv(t)
+	t.Setenv("TSZ_GRPC_TLS_CERT_FILE", "/tls/tls.crt")
+	_, err := LoadExtProcConfig()
+	if err == nil || !strings.Contains(err.Error(), "TSZ_GRPC_TLS_CERT_FILE") {
+		t.Fatalf("LoadExtProcConfig() error = %v, want TLS configuration error", err)
 	}
 }
 

@@ -154,6 +154,7 @@ install_envoy_gateway() {
     --version "$ENVOY_GATEWAY_VERSION" \
     --namespace envoy-gateway-system \
     --create-namespace \
+    --set config.envoyGateway.extensionApis.enableBackend=true \
     --kubeconfig "$KUBECONFIG_PATH" \
     --wait \
     --timeout 5m

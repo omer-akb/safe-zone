@@ -42,6 +42,38 @@ NetworkPolicy is an L3/L4 control and does not provide TLS. Production Envoy
 to TSZ traffic must additionally use TLS or mTLS; this reference policy limits
 which workloads may initiate the gRPC connection.
 
+## TLS and mTLS for the external processor
+
+The runnable reference is
+`examples/bring-your-gateway/19-mtls-and-network-policy`. It uses an isolated,
+throwaway ECDSA P-256 CA to verify the TSZ gRPC server and authenticate Envoy
+with a client certificate. It is a local demonstration, not a production CA.
+
+Enable TSZ mTLS only by setting all three values below; the process fails at
+startup if one is missing, unreadable, or invalid:
+
+```yaml
+env:
+  - name: TSZ_GRPC_TLS_CERT_FILE
+    value: /tls/tls.crt
+  - name: TSZ_GRPC_TLS_KEY_FILE
+    value: /tls/tls.key
+  - name: TSZ_GRPC_TLS_CLIENT_CA_FILE
+    value: /tls/client-ca.crt
+```
+
+TSZ then requires and verifies a client certificate on the gRPC listener with
+TLS 1.2 or newer. Envoy Gateway v1.8.3 is configured through a namespaced
+`Backend`: `caCertificateRefs` holds the TSZ server trust anchor,
+`clientCertificateRef` holds Envoy's client certificate, and `sni` must match
+a DNS SAN on TSZ's server certificate. The Kind bootstrap enables Envoy
+Gateway's optional Backend API for this example.
+
+In production, obtain and rotate both leaf certificates through the
+organization's PKI (typically cert-manager backed by Vault, cloud private CA,
+or another approved issuer). Do not commit private keys, reuse the example CA,
+or configure `insecureSkipVerify`.
+
 During `kind-bootstrap.sh verify-replica-lifecycle` and
 `verify-controller-reconciliation`, the bootstrap creates two temporary probe
 pods. A pod in `envoy-gateway-system` with the TSZ peer label must connect to

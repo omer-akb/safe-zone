@@ -50,6 +50,11 @@ type ExtProcConfig struct {
 	PolicyMaxStaleness              time.Duration
 	PolicyReconcileFailureThreshold uint32
 	GracefulShutdownTimeout         time.Duration
+	// GRPCTLSCertFile, GRPCTLSKeyFile and GRPCTLSClientCAFile enable mTLS on
+	// the external-processor gRPC listener. They must be configured together.
+	GRPCTLSCertFile     string
+	GRPCTLSKeyFile      string
+	GRPCTLSClientCAFile string
 }
 
 // LoadExtProcConfig reads and strictly validates ext-proc environment values.
@@ -127,6 +132,19 @@ func LoadExtProcConfig() (*ExtProcConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	grpcTLSCertFile := envOrDefault("TSZ_GRPC_TLS_CERT_FILE", "")
+	grpcTLSKeyFile := envOrDefault("TSZ_GRPC_TLS_KEY_FILE", "")
+	grpcTLSClientCAFile := envOrDefault("TSZ_GRPC_TLS_CLIENT_CA_FILE", "")
+	grpcTLSFiles := []string{grpcTLSCertFile, grpcTLSKeyFile, grpcTLSClientCAFile}
+	configuredTLSFiles := 0
+	for _, file := range grpcTLSFiles {
+		if file != "" {
+			configuredTLSFiles++
+		}
+	}
+	if configuredTLSFiles != 0 && configuredTLSFiles != len(grpcTLSFiles) {
+		return nil, fmt.Errorf("TSZ_GRPC_TLS_CERT_FILE, TSZ_GRPC_TLS_KEY_FILE and TSZ_GRPC_TLS_CLIENT_CA_FILE must be configured together")
+	}
 
 	return &ExtProcConfig{
 		HTTPPort:                        httpPort,
@@ -141,6 +159,9 @@ func LoadExtProcConfig() (*ExtProcConfig, error) {
 		PolicyMaxStaleness:              maxStaleness,
 		PolicyReconcileFailureThreshold: uint32(failureThreshold),
 		GracefulShutdownTimeout:         shutdownTimeout,
+		GRPCTLSCertFile:                 grpcTLSCertFile,
+		GRPCTLSKeyFile:                  grpcTLSKeyFile,
+		GRPCTLSClientCAFile:             grpcTLSClientCAFile,
 	}, nil
 }
 

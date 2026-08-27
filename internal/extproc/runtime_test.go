@@ -2,12 +2,22 @@ package extproc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +26,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
@@ -216,6 +227,112 @@ func TestRuntimeStartsHealthServersAndShutsDown(t *testing.T) {
 	if err := runtime.Shutdown(shutdownContext); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
+}
+
+func TestRuntimeRequiresVerifiedGRPCClientCertificateWhenMTLSEnabled(t *testing.T) {
+	serverCert, serverKey, clientCA, clientCert, clientKey := writeMTLSTestCertificates(t)
+	httpPort, grpcPort := availablePort(t), availablePort(t)
+	for grpcPort == httpPort {
+		grpcPort = availablePort(t)
+	}
+	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
+	defer redisClient.Close()
+	runtime, err := NewRuntime(&config.ExtProcConfig{
+		HTTPPort: httpPort, GRPCPort: grpcPort, MaxConcurrentStreams: 2, MaxGRPCMessageBytes: 4 * 1024 * 1024,
+		GRPCTLSCertFile: serverCert, GRPCTLSKeyFile: serverKey, GRPCTLSClientCAFile: clientCA,
+	}, Dependencies{DB: &gorm.DB{}, Redis: redisClient, PolicyCache: stubPolicyCache{ready: true}, Registrar: testRegistrar{processor: NewAllowProcessor()}})
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = runtime.Shutdown(ctx)
+	})
+
+	rootPEM, err := os.ReadFile(clientCA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(rootPEM) {
+		t.Fatal("append test CA")
+	}
+	address := "127.0.0.1:" + portString(grpcPort)
+	noClient, err := grpc.NewClient(address, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "localhost"})))
+	if err != nil {
+		t.Fatalf("connect without client certificate: %v", err)
+	}
+	defer noClient.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = grpc_health_v1.NewHealthClient(noClient).Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+	if err == nil {
+		t.Fatal("health check without client certificate succeeded")
+	}
+
+	clientCertificate, err := tls.LoadX509KeyPair(clientCert, clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withClient, err := grpc.NewClient(address, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: "localhost", Certificates: []tls.Certificate{clientCertificate}})))
+	if err != nil {
+		t.Fatalf("connect with client certificate: %v", err)
+	}
+	defer withClient.Close()
+	health, err := grpc_health_v1.NewHealthClient(withClient).Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+	if err != nil {
+		t.Fatalf("health check with client certificate: %v", err)
+	}
+	if health.Status != grpc_health_v1.HealthCheckResponse_SERVING {
+		t.Fatalf("health status = %s, want SERVING", health.Status)
+	}
+}
+
+func writeMTLSTestCertificates(t *testing.T) (serverCertFile, serverKeyFile, caFile, clientCertFile, clientKeyFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := big.NewInt(1)
+	caTemplate := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "test-ca"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePEM := func(name, kind string, bytes []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: kind, Bytes: bytes}), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	caFile = writePEM("ca.crt", "CERTIFICATE", caDER)
+	issue := func(name string, usages []x509.ExtKeyUsage, dnsNames []string) (string, string) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serial.Add(serial, big.NewInt(1))
+		template := &x509.Certificate{SerialNumber: new(big.Int).Set(serial), Subject: pkix.Name{CommonName: name}, DNSNames: dnsNames, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: usages}
+		der, err := x509.CreateCertificate(rand.Reader, template, caTemplate, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return writePEM(name+".crt", "CERTIFICATE", der), writePEM(name+".key", "PRIVATE KEY", keyDER)
+	}
+	serverCertFile, serverKeyFile = issue("server", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, []string{"localhost"})
+	clientCertFile, clientKeyFile = issue("client", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, nil)
+	return
 }
 
 func TestRuntimeReadinessRequiresInitialPolicyCacheLoad(t *testing.T) {
