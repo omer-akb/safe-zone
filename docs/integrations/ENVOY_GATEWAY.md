@@ -4,6 +4,14 @@ This guide covers Envoy Gateway v1.8.3 with Gateway API v1.5.1. The checked-in
 Kind example under `deployments/envoy-gateway/` is the reproducible reference
 environment.
 
+## Deployment package
+
+The supported Kubernetes packaging entry point is the Kustomize package in
+[`deployments/envoy-gateway/kustomize/`](../../deployments/envoy-gateway/kustomize/).
+It provides portable preview, native managed, and separate-data-namespace
+production overlays. The package README explains its prerequisites, image and
+Secret configuration boundaries, install commands, verification, and removal.
+
 ## Network isolation
 
 The Kind bootstrap applies the `same-namespace` overlay under
