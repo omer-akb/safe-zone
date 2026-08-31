@@ -246,6 +246,149 @@ Look for `Accepted`, `ResolvedRefs`, `Programmed`, and `PolicySynced`. A
 conflicted attachment is explicitly reported as `Programmed=False` with reason
 `Conflicted`; it must not leave a managed `EnvoyExtensionPolicy` behind.
 
+## Upgrades and rollback
+
+Treat a TSZ upgrade as three separate operations: the processor and controller
+workloads, the Kubernetes API objects, and the active policy snapshot. Do not
+combine all three changes in one unverified deployment. Record the currently
+running image digests, manifest revision, Envoy Gateway and Gateway API
+versions, active policy versions, and the output of the checks below before
+starting. Back up PostgreSQL using the project-approved backup procedure
+before applying a release that contains database migrations.
+
+The reference environment has two `tsz-ext-proc` replicas, readiness probes,
+and a PodDisruptionBudget. A rolling Deployment update therefore keeps a ready
+processor available when the new image becomes ready. This is not a guarantee
+of zero disruption: keep the configured Envoy failure policy in mind and
+perform the upgrade in a maintenance window appropriate for a fail-closed
+route.
+
+### Pre-upgrade checks
+
+1. Read the release notes and confirm that the target TSZ release supports the
+   installed Envoy Gateway and Gateway API versions. This guide's tested
+   reference is Envoy Gateway v1.8.3 with Gateway API v1.5.1.
+2. Confirm that the current installation is healthy and that every managed
+   policy is reconciled:
+
+   ```bash
+   kubectl -n tsz-byg-demo get deployment tsz-ext-proc tsz-controller
+   kubectl -n tsz-byg-demo rollout status deployment/tsz-ext-proc
+   kubectl -n tsz-byg-demo rollout status deployment/tsz-controller
+   kubectl -n tsz-byg-demo get tszguardrailpolicy
+   kubectl -n tsz-byg-demo get envoyextensionpolicy
+   ```
+
+   Inspect each `TSZGuardrailPolicy` if necessary. `Accepted`,
+   `ResolvedRefs`, `Programmed`, and `PolicySynced` must be `True`; resolve a
+   degraded or conflicted state before upgrading.
+3. Send the documented safe, masking, and blocking requests through each
+   protected route. Retain the resulting request ID, TSZ RID, and active
+   policy version as the pre-upgrade baseline. Verify that a blocked request
+   does not reach the upstream.
+4. For the preview profile, also record the manually applied
+   `EnvoyExtensionPolicy`, the gateway-owned trusted header mutation, and the
+   active policy name. For the native profile, record the
+   `TSZGuardrailPolicy` manifests and their `status.observedGeneration`.
+
+### Workload and manifest upgrade
+
+1. Review the target manifests with `kubectl diff` (or the equivalent Helm or
+   Kustomize render-and-diff step used by the deployment). Pin image tags or,
+   preferably, image digests; do not upgrade a production installation using a
+   floating tag.
+2. If the release changes the CRD or RBAC, apply those compatible API assets
+   before deploying the controller. Do not delete a CRD to upgrade or
+   downgrade it: deleting it also deletes its policy objects.
+3. Apply the target controller and processor manifests, then wait for each
+   rollout to finish:
+
+   ```bash
+   kubectl apply -f config/crd/bases/security.thyris.ai_tszguardrailpolicies.yaml
+   kubectl apply -f config/rbac/role.yaml
+   kubectl apply -f deployments/envoy-gateway/controller/controller.yaml
+   kubectl apply -f deployments/envoy-gateway/tsz-ext-proc.yaml
+   kubectl -n tsz-byg-demo rollout status deployment/tsz-controller --timeout=5m
+   kubectl -n tsz-byg-demo rollout status deployment/tsz-ext-proc --timeout=5m
+   ```
+
+   Replace these paths and namespace with the rendered, version-pinned assets
+   used by the environment. Run any release-provided database migration exactly
+   once and wait for it to succeed before relying on a new runtime that needs
+   its schema.
+4. Repeat the policy-condition checks and the safe/mask/block verification.
+   Confirm that processor replicas converge on the expected immutable policy
+   version and that Envoy still reaches the processor over the configured
+   TLS/mTLS connection. Do not declare the upgrade complete merely because the
+   Deployments are available.
+
+### Application rollback
+
+If the new controller or processor fails readiness, introduces incorrect
+enforcement, or cannot maintain a supported policy version, stop the rollout
+and restore the last known-good **workload** revision. For a Deployment
+managed directly by Kubernetes this is:
+
+```bash
+kubectl -n tsz-byg-demo rollout undo deployment/tsz-controller
+kubectl -n tsz-byg-demo rollout undo deployment/tsz-ext-proc
+kubectl -n tsz-byg-demo rollout status deployment/tsz-controller --timeout=5m
+kubectl -n tsz-byg-demo rollout status deployment/tsz-ext-proc --timeout=5m
+```
+
+For a Helm or GitOps deployment, use that system's recorded previous release
+instead of mixing it with `kubectl rollout undo`. Reapply the corresponding
+last known-good manifests, and restore PostgreSQL only if the release notes
+explicitly require a reversible database rollback. A database restore is a
+separate, potentially disruptive operation; do not use it as the first
+response to a processor image failure.
+
+Never roll back a CRD by deleting it. If a released CRD is not compatible with
+the prior controller, stop and follow the version-specific release procedure;
+the safe default is to keep the compatible CRD while rolling back only the
+controller and processor images.
+
+After an application rollback, verify the managed policy conditions,
+`EnvoyExtensionPolicy` attachment, processor readiness, and the same
+safe/mask/block requests used before the change. Investigate any policy-version
+skew or `PolicySynced=False` before resuming normal change activity.
+
+### Policy rollback
+
+Policy rollback is independent of an application rollback. TSZ policy
+snapshots are immutable. Activating a new snapshot supersedes the previous
+one; rollback reactivates that previous compiled snapshot atomically and
+notifies processor replicas through Redis. In-flight requests continue with
+the version selected when they started, while a request and its response use
+the same selected version.
+
+For a preview-managed policy, run `tsz-policy` in an approved administrative
+environment with the same PostgreSQL and Redis configuration as the processor:
+
+```bash
+tsz-policy -name <policy-name> -rollback
+```
+
+The command restores the **latest superseded** version only; it does not accept
+an arbitrary version, recompile a policy, or modify an immutable definition.
+It prints the restored policy name, version, and snapshot ID. If the required
+version is not the latest superseded version, stop and create, validate,
+compile, and activate a new policy from the approved historical definition
+instead of editing a snapshot in place.
+
+For a native-managed inline policy, revert the approved
+`TSZGuardrailPolicy` manifest in source control and apply it. The controller
+then compiles and activates the deterministic replacement snapshot. For
+`policySource: PostgresRef`, change the reference only to an existing,
+compatible immutable version and wait for `PolicySynced=True`. In either case,
+do not delete the managed `EnvoyExtensionPolicy`; the controller owns it.
+
+After a policy rollback, verify the active version in processor audit or
+PII-safe `io.thyris.tsz` metadata, wait for every replica to converge, and run
+safe, mask, and block requests. If Redis or PostgreSQL is unavailable, follow
+the configured failure policy and treat the rollback as incomplete until the
+controller and processor readiness checks recover.
+
 ## Migration between profiles
 
 1. Confirm all target routes are covered by native `TSZGuardrailPolicy`
