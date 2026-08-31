@@ -263,6 +263,15 @@ jobs:
           TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
         run: examples/bring-your-gateway/smoke.sh
 
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Verify fail-closed processor outage through Envoy
+        env:
+          TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
+          TSZ_BYG_SKIP_BOOTSTRAP: "1"
+        run: make perf-extproc-outage
+
       - name: Remove Kind cluster
         if: always()
         env:

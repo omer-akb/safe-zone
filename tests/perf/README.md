@@ -34,6 +34,51 @@ Additional knobs are `TSZ_PERF_PRE_ALLOCATED_VUS`, `TSZ_PERF_MAX_VUS`,
 `TSZ_BYG_SKIP_BOOTSTRAP=1` only when the same prepared Kind environment is
 already running.
 
+## Processor-outage boundedness
+
+`make perf-extproc-outage` prepares the fail-closed route, scales
+`tsz-ext-proc` to zero, and sends concurrent normal and streaming request
+shapes through Envoy. It asserts all results are `500` or `503`, the p99
+latency remains under a bounded timeout budget, and Envoy's
+`server.memory_allocated` growth remains below the configured limit. It also
+reads the test-only mock upstream's content-free monotonic request counter
+before and after the load; the counter must not change, proving that the
+failure response was produced by Envoy before upstream forwarding. It also
+asserts the live ext-proc xDS configuration has no gRPC `retry_policy`:
+the outage policy is **zero request retries**. Envoy may reconnect its gRPC
+transport once endpoints return, but it must not replay an in-flight client
+request. `TSZ_OUTAGE_EXPECTED_REQUEST_RETRIES` defaults to `0` and rejects
+other values because Envoy Gateway v1.8.3's `EnvoyExtensionPolicy.extProc`
+profile has no explicit per-request retry field. The processor deployment is
+restored to two replicas on exit.
+
+Defaults are 50 RPS for 30 seconds, a 3-second p99 budget, and a 32 MiB
+allocated-memory allowance. Tune the environment-specific values without
+editing the scenario:
+
+```bash
+TSZ_OUTAGE_RATE=100 TSZ_OUTAGE_DURATION=2m \
+TSZ_OUTAGE_TIMEOUT_BUDGET_MS=3000 \
+TSZ_OUTAGE_MAX_MEMORY_DELTA_BYTES=$((64 * 1024 * 1024)) \
+make perf-extproc-outage
+```
+
+Choose `TSZ_OUTAGE_TIMEOUT_BUDGET_MS` from the ext-proc message timeout plus
+transport and proxy scheduling allowance. With the current `messageTimeout`
+of 2 seconds, 3 seconds is a conservative local starting budget. In
+production, set it from a percentile of healthy processing latency and the
+request SLO, leaving room for retries only if a finite retry budget is
+explicitly configured.
+
+## Chaos scenario matrix
+
+The expected failure-injection coverage and pass criteria are maintained in
+[CHAOS.md](CHAOS.md). `processor-all-endpoints-unavailable` is automated by
+`make perf-extproc-outage`; the remaining scenarios are deliberately listed
+with their required injection mechanism and evidence so they can be added to
+the same Kind harness without turning an ad-hoc incident exercise into test
+coverage.
+
 ## Baseline result
 
 Environment: local Kind reference deployment, Envoy Gateway v1.8.3, local mock
