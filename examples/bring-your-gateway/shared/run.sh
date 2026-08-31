@@ -321,4 +321,12 @@ if [[ "$(basename "${example_dir}")" == "05-fail-open" ]]; then
     echo "fail-open changed the upstream request body" >&2; exit 1;
   }
 fi
+if [[ -f "${example_dir}/expect-shared-processor" ]]; then
+  ready_replicas="$(kubectl -n "${namespace}" get deployment/tsz-ext-proc -o jsonpath='{.status.readyReplicas}')"
+  min_replicas="$(kubectl -n "${namespace}" get hpa/tsz-ext-proc -o jsonpath='{.spec.minReplicas}')"
+  unavailable="$(kubectl -n "${namespace}" get pdb/tsz-ext-proc -o jsonpath='{.spec.maxUnavailable}')"
+  [[ "${ready_replicas}" -ge 2 && "${min_replicas}" -ge 2 && "${unavailable}" == "1" ]] || {
+    echo "shared processor availability profile is not ready_replicas>=2, minReplicas>=2, maxUnavailable=1" >&2; exit 1;
+  }
+fi
 printf 'PASS %s: HTTP %s\n' "$(basename "${example_dir}")" "${status}"

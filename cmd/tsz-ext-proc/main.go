@@ -90,6 +90,11 @@ func main() {
 	if os.Getenv("TSZ_EXAMPLE_AUDIT_FAILURE") == "1" {
 		log.Println("BYG example audit fault injection is enabled")
 		auditor = exampleFaultAuditor{}
+	} else if endpoint := os.Getenv("TSZ_AUDIT_WEBHOOK_URL"); endpoint != "" {
+		auditor, err = guardrails.NewWebhookAuditor(endpoint)
+		if err != nil {
+			log.Fatalf("initialize audit webhook: %v", err)
+		}
 	}
 	resolutionMode, err := policyResolutionMode()
 	if err != nil {

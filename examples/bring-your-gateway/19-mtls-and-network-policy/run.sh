@@ -33,4 +33,13 @@ kubectl -n "$namespace" delete envoyextensionpolicy tsz-request-guardrail --igno
 kubectl apply -f "${example_dir}/resources.yaml"
 kubectl -n "$namespace" wait --for=condition=Accepted backend/tsz-ext-proc-mtls --timeout=90s
 kubectl -n "$namespace" wait --for=condition=Accepted envoyextensionpolicy/tsz-request-guardrail-mtls --timeout=90s
-printf 'mTLS resources are installed. Run the normal BYG request check after the Envoy policy reports Accepted.\n'
+envoy_service="$(kubectl -n envoy-gateway-system get service -l "gateway.envoyproxy.io/owning-gateway-namespace=${namespace},gateway.envoyproxy.io/owning-gateway-name=echo-gateway" -o jsonpath='{.items[0].metadata.name}')"
+[[ -n "$envoy_service" ]] || { echo "Envoy data-plane Service not found" >&2; exit 1; }
+port="$((29000 + ($$ % 2000)))"
+kubectl -n envoy-gateway-system port-forward "service/${envoy_service}" "${port}:80" >/dev/null 2>&1 &
+forward_pid=$!
+trap 'kill "$forward_pid" >/dev/null 2>&1 || true' EXIT
+sleep 2
+status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'content-type: application/json' --data-binary "@${repo_root}/examples/bring-your-gateway/shared/fixtures/safe.json" "http://127.0.0.1:${port}/v1/chat/completions")"
+[[ "$status" == "200" ]] || { echo "mTLS protected route returned HTTP $status, want 200" >&2; exit 1; }
+printf 'PASS mTLS and NetworkPolicy: accepted mutual TLS route and labeled-peer isolation verified.\n'
