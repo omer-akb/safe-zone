@@ -277,3 +277,16 @@ jobs:
         env:
           TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
         run: deployments/envoy-gateway/kind-bootstrap.sh down
+
+  documentation-link-checks:
+    name: Documentation link checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --root-dir "$(pwd)" --verbose --no-progress --max-retries 3 --timeout 20 './**/*.md'
+          token: ${{ secrets.GITHUB_TOKEN }}
