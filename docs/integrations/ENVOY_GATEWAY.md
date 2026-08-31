@@ -38,6 +38,20 @@ Keep the HTTP health/metrics port (`8080`) out of the ext_proc ingress rule.
 Expose it separately and only to an authenticated operational or Prometheus
 workload when needed.
 
+## Availability and autoscaling
+
+The reference `tsz-ext-proc.yaml` includes an initial production scaling
+profile: two to ten replicas, CPU and memory targets of 60% and 80%, a
+five-minute scale-down stabilization window, and a PDB allowing at most one
+voluntary pod eviction. CPU utilization is calculated from the container CPU
+request, so do not remove that request while the HPA is enabled.
+
+These values are intentionally conservative defaults, not a capacity promise.
+Before production rollout, use processor request rate, p95/p99 latency, CPU,
+memory, error rate, and concurrent-stream measurements to tune them. The PDB
+only protects voluntary disruptions such as node drain and does not protect
+against an unexpected node or process failure.
+
 NetworkPolicy is an L3/L4 control and does not provide TLS. Production Envoy
 to TSZ traffic must additionally use TLS or mTLS; this reference policy limits
 which workloads may initiate the gRPC connection.
@@ -102,7 +116,7 @@ Do not combine a manual attachment and a managed attachment on the same route.
 Do not set `header` for some routes and `attribute` for others in a shared
 `tsz-ext-proc` Deployment. Such a configuration can select the wrong identity
 source or cause a mandatory policy to be unresolved.
-
+git 
 ## Response-only local replies
 
 Envoy Gateway can invoke `ext_proc` for a response even when an earlier native
