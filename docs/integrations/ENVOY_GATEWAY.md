@@ -12,6 +12,10 @@ It provides portable preview, native managed, and separate-data-namespace
 production overlays. The package README explains its prerequisites, image and
 Secret configuration boundaries, install commands, verification, and removal.
 
+Operational deployment, observability, and incident-triage guidance is kept
+in the [BYG operations guides](../operations/BYG_DEPLOYMENT.md) to keep this
+integration guide focused on the Envoy-specific configuration contract.
+
 ## Network isolation
 
 The Kind bootstrap applies the `same-namespace` overlay under

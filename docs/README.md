@@ -42,6 +42,15 @@ The documentation set is organized as follows:
 - **Envoy Gateway Integration** – Preview/manual and native/managed installation profiles
   `integrations/ENVOY_GATEWAY.md`
 
+- **BYG Deployment Operations** – Deployment topology, operational verification and change management
+  `operations/BYG_DEPLOYMENT.md`
+
+- **BYG Observability Operations** – Metrics, tracing, audit/SIEM correlation and telemetry safety
+  `operations/BYG_OBSERVABILITY.md`
+
+- **BYG Troubleshooting** – Policy, connectivity, timeout, mutation and streaming incident triage
+  `operations/BYG_TROUBLESHOOTING.md`
+
 - **Security Roadmap** – Detailed hardening milestones and implementation status  
   `SECURITY_ROADMAP.md`
 
