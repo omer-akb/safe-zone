@@ -86,6 +86,12 @@ type CacheObserver interface {
 	ObservePolicyReconcile(result string, duration time.Duration)
 	ObservePolicyActivationNotification(result string)
 	SetActivePolicySnapshots(count int)
+	SetPolicySnapshotVersions(snapshots []SnapshotVersion)
+}
+
+type SnapshotVersion struct {
+	PolicyID string
+	Version  int
 }
 
 type noopCacheObserver struct{}
@@ -93,6 +99,7 @@ type noopCacheObserver struct{}
 func (noopCacheObserver) ObservePolicyReconcile(string, time.Duration) {}
 func (noopCacheObserver) ObservePolicyActivationNotification(string)   {}
 func (noopCacheObserver) SetActivePolicySnapshots(int)                 {}
+func (noopCacheObserver) SetPolicySnapshotVersions([]SnapshotVersion)  {}
 
 func NewCache(repository Repository, redisClient *redis.Client, reconcileInterval time.Duration) (*Cache, error) {
 	return NewCacheWithReadiness(repository, redisClient, reconcileInterval, DefaultReadinessSettings())
@@ -218,6 +225,7 @@ func (c *Cache) Reconcile(ctx context.Context) (err error) {
 	c.state.Store(&cacheState{snapshots: next})
 	c.ready.Store(true)
 	c.observer.SetActivePolicySnapshots(len(next))
+	c.observer.SetPolicySnapshotVersions(snapshotVersions(next))
 	return nil
 }
 
@@ -316,7 +324,16 @@ func (c *Cache) handleActivationMessage(ctx context.Context, payload string) err
 	}
 	c.swapOne(event.PolicyID, compiled)
 	c.observer.SetActivePolicySnapshots(len(c.state.Load().snapshots))
+	c.observer.SetPolicySnapshotVersions(snapshotVersions(c.state.Load().snapshots))
 	return nil
+}
+
+func snapshotVersions(snapshots map[string]CompiledSnapshot) []SnapshotVersion {
+	versions := make([]SnapshotVersion, 0, len(snapshots))
+	for policyID, snapshot := range snapshots {
+		versions = append(versions, SnapshotVersion{PolicyID: policyID, Version: snapshot.Version})
+	}
+	return versions
 }
 
 func (c *Cache) swapOne(policyID string, snapshot CompiledSnapshot) {

@@ -3,11 +3,13 @@
 package observability
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"thyris-sz/internal/extproc"
+	"thyris-sz/internal/extproc/policy"
 )
 
 // ExtProcMetrics records operational data for Envoy external processing. It
@@ -28,6 +30,7 @@ type ExtProcMetrics struct {
 	policyReconciles     *prometheus.HistogramVec
 	policyNotifications  *prometheus.CounterVec
 	activeSnapshots      prometheus.Gauge
+	snapshotVersions     *prometheus.GaugeVec
 }
 
 func NewExtProcMetrics(registerer prometheus.Registerer) (*ExtProcMetrics, error) {
@@ -46,8 +49,9 @@ func NewExtProcMetrics(registerer prometheus.Registerer) (*ExtProcMetrics, error
 		policyReconciles:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "reconcile_duration_seconds", Help: "Active policy snapshot reconciliation duration.", Buckets: prometheus.DefBuckets}, []string{"result"}),
 		policyNotifications:  prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "activation_notifications_total", Help: "Redis policy activation notification outcomes."}, []string{"result"}),
 		activeSnapshots:      prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "active_snapshots", Help: "Active immutable policy snapshots loaded by this processor replica."}),
+		snapshotVersions:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "snapshot_info", Help: "Immutable policy version loaded by this processor replica."}, []string{"policy", "version"}),
 	}
-	collectors := []prometheus.Collector{metrics.requests, metrics.responses, metrics.actions, metrics.detections, metrics.processingDuration, metrics.failures, metrics.timeouts, metrics.bodyBytes, metrics.activeStreams, metrics.streamHalts, metrics.responseWithoutState, metrics.policyReconciles, metrics.policyNotifications, metrics.activeSnapshots}
+	collectors := []prometheus.Collector{metrics.requests, metrics.responses, metrics.actions, metrics.detections, metrics.processingDuration, metrics.failures, metrics.timeouts, metrics.bodyBytes, metrics.activeStreams, metrics.streamHalts, metrics.responseWithoutState, metrics.policyReconciles, metrics.policyNotifications, metrics.activeSnapshots, metrics.snapshotVersions}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err
@@ -96,6 +100,14 @@ func (m *ExtProcMetrics) ObservePolicyActivationNotification(result string) {
 	m.policyNotifications.WithLabelValues(boundedPolicyNotificationResult(result)).Inc()
 }
 func (m *ExtProcMetrics) SetActivePolicySnapshots(count int) { m.activeSnapshots.Set(float64(count)) }
+func (m *ExtProcMetrics) SetPolicySnapshotVersions(snapshots []policy.SnapshotVersion) {
+	m.snapshotVersions.Reset()
+	for _, snapshot := range snapshots {
+		if snapshot.Version > 0 {
+			m.snapshotVersions.WithLabelValues(boundedPolicy(snapshot.PolicyID), strconv.Itoa(snapshot.Version)).Set(1)
+		}
+	}
+}
 
 func boundedStage(stage extproc.ProcessingStage) string {
 	if stage == extproc.StageResponse {
