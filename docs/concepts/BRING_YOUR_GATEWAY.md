@@ -17,6 +17,8 @@ upstream service.
 
 The Envoy Gateway installation guide is at
 [integrations/ENVOY_GATEWAY.md](../integrations/ENVOY_GATEWAY.md).
+The [Extension Server security evaluation](../security/BYG_EXTENSION_SERVER_EVALUATION.md)
+records why direct xDS control-plane integration remains experimental.
 
 ## MVP compatibility decision
 

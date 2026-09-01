@@ -51,6 +51,9 @@ The documentation set is organized as follows:
 - **BYG Troubleshooting** – Policy, connectivity, timeout, mutation and streaming incident triage
   `operations/BYG_TROUBLESHOOTING.md`
 
+- **BYG Extension Server Security Evaluation** – Experimental-control-plane decision and promotion criteria
+  `security/BYG_EXTENSION_SERVER_EVALUATION.md`
+
 - **Security Roadmap** – Detailed hardening milestones and implementation status  
   `SECURITY_ROADMAP.md`
 
