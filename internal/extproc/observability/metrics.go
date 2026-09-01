@@ -4,6 +4,7 @@ package observability
 
 import (
 	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"thyris-sz/internal/extproc"
@@ -24,6 +25,9 @@ type ExtProcMetrics struct {
 	activeStreams        prometheus.Gauge
 	streamHalts          prometheus.Counter
 	responseWithoutState *prometheus.CounterVec
+	policyReconciles     *prometheus.HistogramVec
+	policyNotifications  *prometheus.CounterVec
+	activeSnapshots      prometheus.Gauge
 }
 
 func NewExtProcMetrics(registerer prometheus.Registerer) (*ExtProcMetrics, error) {
@@ -39,8 +43,11 @@ func NewExtProcMetrics(registerer prometheus.Registerer) (*ExtProcMetrics, error
 		activeStreams:        prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "tsz", Subsystem: "extproc", Name: "active_streams", Help: "Currently active external-processing gRPC streams."}),
 		streamHalts:          prometheus.NewCounter(prometheus.CounterOpts{Namespace: "tsz", Subsystem: "extproc", Name: "stream_halts_total", Help: "Streaming responses halted by a guardrail decision."}),
 		responseWithoutState: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "tsz", Subsystem: "extproc", Name: "response_without_request_state_total", Help: "Response callbacks received without pinned request stream state."}, []string{"outcome"}),
+		policyReconciles:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "reconcile_duration_seconds", Help: "Active policy snapshot reconciliation duration.", Buckets: prometheus.DefBuckets}, []string{"result"}),
+		policyNotifications:  prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "activation_notifications_total", Help: "Redis policy activation notification outcomes."}, []string{"result"}),
+		activeSnapshots:      prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "tsz", Subsystem: "policy_cache", Name: "active_snapshots", Help: "Active immutable policy snapshots loaded by this processor replica."}),
 	}
-	collectors := []prometheus.Collector{metrics.requests, metrics.responses, metrics.actions, metrics.detections, metrics.processingDuration, metrics.failures, metrics.timeouts, metrics.bodyBytes, metrics.activeStreams, metrics.streamHalts, metrics.responseWithoutState}
+	collectors := []prometheus.Collector{metrics.requests, metrics.responses, metrics.actions, metrics.detections, metrics.processingDuration, metrics.failures, metrics.timeouts, metrics.bodyBytes, metrics.activeStreams, metrics.streamHalts, metrics.responseWithoutState, metrics.policyReconciles, metrics.policyNotifications, metrics.activeSnapshots}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err
@@ -82,6 +89,13 @@ func (m *ExtProcMetrics) ObserveDetections(categories []string, stage extproc.Pr
 func (m *ExtProcMetrics) ObserveResponseWithoutRequestState(outcome string) {
 	m.responseWithoutState.WithLabelValues(boundedReason(outcome)).Inc()
 }
+func (m *ExtProcMetrics) ObservePolicyReconcile(result string, seconds time.Duration) {
+	m.policyReconciles.WithLabelValues(boundedPolicyCacheResult(result)).Observe(seconds.Seconds())
+}
+func (m *ExtProcMetrics) ObservePolicyActivationNotification(result string) {
+	m.policyNotifications.WithLabelValues(boundedPolicyNotificationResult(result)).Inc()
+}
+func (m *ExtProcMetrics) SetActivePolicySnapshots(count int) { m.activeSnapshots.Set(float64(count)) }
 
 func boundedStage(stage extproc.ProcessingStage) string {
 	if stage == extproc.StageResponse {
@@ -114,6 +128,22 @@ func boundedReason(reason string) string {
 	switch reason {
 	case "timeout", "processor", "policy_resolution", "body_limit", "stream_buffer", "audit", "protocol", "response_without_request_state", "fail_open", "fail_closed":
 		return reason
+	default:
+		return "other"
+	}
+}
+
+func boundedPolicyCacheResult(result string) string {
+	if result == "success" || result == "error" {
+		return result
+	}
+	return "other"
+}
+
+func boundedPolicyNotificationResult(result string) string {
+	switch result {
+	case "success", "rejected", "reload_failed", "behind":
+		return result
 	default:
 		return "other"
 	}

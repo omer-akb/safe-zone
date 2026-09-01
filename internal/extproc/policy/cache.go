@@ -77,7 +77,22 @@ type Cache struct {
 	consecutiveFailures atomic.Uint32
 	reconcileMu         sync.Mutex
 	now                 func() time.Time
+	observer            CacheObserver
 }
+
+// CacheObserver records bounded operational signals without exposing policy
+// contents, IDs, tenants, or snapshot versions as metric labels.
+type CacheObserver interface {
+	ObservePolicyReconcile(result string, duration time.Duration)
+	ObservePolicyActivationNotification(result string)
+	SetActivePolicySnapshots(count int)
+}
+
+type noopCacheObserver struct{}
+
+func (noopCacheObserver) ObservePolicyReconcile(string, time.Duration) {}
+func (noopCacheObserver) ObservePolicyActivationNotification(string)   {}
+func (noopCacheObserver) SetActivePolicySnapshots(int)                 {}
 
 func NewCache(repository Repository, redisClient *redis.Client, reconcileInterval time.Duration) (*Cache, error) {
 	return NewCacheWithReadiness(repository, redisClient, reconcileInterval, DefaultReadinessSettings())
@@ -102,9 +117,19 @@ func NewCacheWithReadiness(repository Repository, redisClient *redis.Client, rec
 		reconcileInterval: reconcileInterval,
 		readiness:         readiness,
 		now:               time.Now,
+		observer:          noopCacheObserver{},
 	}
 	cache.state.Store(&cacheState{snapshots: map[string]CompiledSnapshot{}})
 	return cache, nil
+}
+
+// SetObserver must be called before Start. It exists to keep the policy cache
+// independent from a particular Prometheus registry or transport package.
+func (c *Cache) SetObserver(observer CacheObserver) {
+	if observer == nil {
+		observer = noopCacheObserver{}
+	}
+	c.observer = observer
 }
 
 // Start performs an immediate full PostgreSQL load, then starts periodic
@@ -161,15 +186,18 @@ func (c *Cache) Snapshots() []CompiledSnapshot {
 // Reconcile atomically replaces the complete cache from PostgreSQL. Readiness
 // becomes true only after the first successful full load.
 func (c *Cache) Reconcile(ctx context.Context) (err error) {
+	started := time.Now()
 	c.reconcileMu.Lock()
 	defer c.reconcileMu.Unlock()
 	defer func() {
 		if err != nil {
 			c.consecutiveFailures.Add(1)
+			c.observer.ObservePolicyReconcile("error", time.Since(started))
 			return
 		}
 		c.lastReconcileAt.Store(c.now().UTC().UnixNano())
 		c.consecutiveFailures.Store(0)
+		c.observer.ObservePolicyReconcile("success", time.Since(started))
 	}()
 
 	snapshots, err := c.repository.ActiveSnapshots(ctx)
@@ -189,6 +217,7 @@ func (c *Cache) Reconcile(ctx context.Context) (err error) {
 	}
 	c.state.Store(&cacheState{snapshots: next})
 	c.ready.Store(true)
+	c.observer.SetActivePolicySnapshots(len(next))
 	return nil
 }
 
@@ -255,29 +284,38 @@ func (c *Cache) receiveSubscription(ctx context.Context) error {
 }
 
 func (c *Cache) handleActivationMessage(ctx context.Context, payload string) error {
+	result := "success"
+	defer func() { c.observer.ObservePolicyActivationNotification(result) }()
 	var event ActivationEvent
 	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		result = "rejected"
 		return fmt.Errorf("decode activation notification: %w", err)
 	}
 	if event.PolicyID == "" || event.Version <= 0 {
+		result = "rejected"
 		return fmt.Errorf("invalid activation notification: %+v", event)
 	}
 	policyName, tenant, err := parsePolicyIdentifier(event.PolicyID)
 	if err != nil {
+		result = "rejected"
 		return err
 	}
 	snapshot, err := c.repository.ActiveSnapshot(ctx, policyName, tenant)
 	if err != nil {
+		result = "reload_failed"
 		return fmt.Errorf("reload activated policy %q: %w", event.PolicyID, err)
 	}
 	compiled, err := immutableSnapshot(snapshot)
 	if err != nil {
+		result = "rejected"
 		return err
 	}
 	if compiled.Version < event.Version {
+		result = "behind"
 		return fmt.Errorf("PostgreSQL policy %q version %d is behind notification version %d", event.PolicyID, compiled.Version, event.Version)
 	}
 	c.swapOne(event.PolicyID, compiled)
+	c.observer.SetActivePolicySnapshots(len(c.state.Load().snapshots))
 	return nil
 }
 

@@ -56,6 +56,11 @@ func main() {
 
 	database.InitDB()
 	cache.InitRedis()
+	metricsRegistry := prometheus.NewRegistry()
+	extProcMetrics, err := observability.NewExtProcMetrics(metricsRegistry)
+	if err != nil {
+		log.Fatalf("initialize ext-proc metrics: %v", err)
+	}
 	detector := guardrails.NewDetector()
 	guardrailService, err := guardrails.NewGuardrailService(detector)
 	if err != nil {
@@ -77,6 +82,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize policy cache: %v", err)
 	}
+	policyCache.SetObserver(extProcMetrics)
 	applicationContext, cancelApplication := context.WithCancel(context.Background())
 	defer cancelApplication()
 	if err := policyCache.Start(applicationContext); err != nil {
@@ -107,11 +113,6 @@ func main() {
 			log.Fatalf("initialize native route binding store: %v", err)
 		}
 		resolver = extproc.AttributePolicyResolver{Mapping: bindings}
-	}
-	metricsRegistry := prometheus.NewRegistry()
-	extProcMetrics, err := observability.NewExtProcMetrics(metricsRegistry)
-	if err != nil {
-		log.Fatalf("initialize ext-proc metrics: %v", err)
 	}
 	transport, err := envoy.NewServerWithResolverAndSettings(processor, policyCache, resolver, auditor, envoy.ServerSettings{
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
