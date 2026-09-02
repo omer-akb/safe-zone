@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"thyris-sz/internal/extproc/policy"
 	"thyris-sz/internal/guardrails"
 )
@@ -113,7 +116,7 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 	if len(locations) == 0 {
 		return result, mutated, nil
 	}
-	inspection, err := p.service.Inspect(ctx, guardrails.InspectInput{Text: joined.String(), RID: request.RID, Policy: rules})
+	inspection, err := p.inspectWithTrace(ctx, request, rules, joined.String())
 	if err != nil {
 		return ProcessingResult{}, nil, fmt.Errorf("inspect streaming assistant window: %w", err)
 	}
@@ -169,9 +172,7 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 	mutations := make([]ChatContentMutation, 0)
 	started := time.Now()
 	for _, content := range chat.UserContents {
-		inspection, err := p.service.Inspect(ctx, guardrails.InspectInput{
-			Text: content.Content, RID: request.RID, Policy: rules,
-		})
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
 			return ProcessingResult{}, fmt.Errorf("inspect user message %d: %w", content.MessageIndex, err)
 		}
@@ -226,9 +227,7 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 	mutations := make([]ChatResponseContentMutation, 0)
 	started := time.Now()
 	for _, content := range chat.AssistantContents {
-		inspection, err := p.service.Inspect(ctx, guardrails.InspectInput{
-			Text: content.Content, RID: request.RID, Policy: rules,
-		})
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
 			return ProcessingResult{}, fmt.Errorf("inspect assistant choice %d: %w", content.ChoiceIndex, err)
 		}
@@ -269,6 +268,26 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 	}
 	result.Body = body
 	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+// inspectWithTrace creates a latency span around deterministic and semantic
+// validation without ever recording the inspected text, request body, or PII.
+func (p *OpenAIRequestProcessor) inspectWithTrace(ctx context.Context, request ProcessingRequest, rules *guardrails.CompiledPolicyRules, text string) (guardrails.InspectResult, error) {
+	ctx, span := otel.Tracer("thyris-sz/guardrails").Start(ctx, "tsz.guardrail.validator")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("tsz.stage", string(request.Stage)),
+		attribute.String("tsz.policy.id", request.PolicyID),
+		attribute.Int("tsz.policy.version", request.PolicyVersion),
+	)
+	result, err := p.service.Inspect(ctx, guardrails.InspectInput{Text: text, RID: request.RID, Policy: rules})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "guardrail inspection failed")
+		return guardrails.InspectResult{}, err
+	}
+	span.SetAttributes(attribute.Int("tsz.detection_count", result.DetectionCount))
 	return result, nil
 }
 

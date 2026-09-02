@@ -263,8 +263,30 @@ jobs:
           TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
         run: examples/bring-your-gateway/smoke.sh
 
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Verify fail-closed processor outage through Envoy
+        env:
+          TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
+          TSZ_BYG_SKIP_BOOTSTRAP: "1"
+        run: make perf-extproc-outage
+
       - name: Remove Kind cluster
         if: always()
         env:
           TSZ_BYG_CLUSTER_NAME: tsz-byg-ci
         run: deployments/envoy-gateway/kind-bootstrap.sh down
+
+  documentation-link-checks:
+    name: Documentation link checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --root-dir "$(pwd)" --verbose --no-progress --max-retries 3 --timeout 20 './**/*.md'
+          token: ${{ secrets.GITHUB_TOKEN }}

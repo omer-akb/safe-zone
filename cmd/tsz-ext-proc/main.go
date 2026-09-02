@@ -38,8 +38,29 @@ func main() {
 		log.Fatalf("invalid ext-proc configuration: %v", err)
 	}
 
+	tracingConfig, err := observability.TracingConfigFromEnv()
+	if err != nil {
+		log.Fatalf("invalid OpenTelemetry configuration: %v", err)
+	}
+	tracing, err := observability.NewTracing(context.Background(), tracingConfig)
+	if err != nil {
+		log.Fatalf("initialize OpenTelemetry tracing: %v", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), extProcConfig.GracefulShutdownTimeout)
+		defer cancel()
+		if err := tracing.Shutdown(shutdownContext); err != nil {
+			log.Printf("shutdown OpenTelemetry tracing: %v", err)
+		}
+	}()
+
 	database.InitDB()
 	cache.InitRedis()
+	metricsRegistry := prometheus.NewRegistry()
+	extProcMetrics, err := observability.NewExtProcMetrics(metricsRegistry)
+	if err != nil {
+		log.Fatalf("initialize ext-proc metrics: %v", err)
+	}
 	detector := guardrails.NewDetector()
 	guardrailService, err := guardrails.NewGuardrailService(detector)
 	if err != nil {
@@ -61,6 +82,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize policy cache: %v", err)
 	}
+	policyCache.SetObserver(extProcMetrics)
 	applicationContext, cancelApplication := context.WithCancel(context.Background())
 	defer cancelApplication()
 	if err := policyCache.Start(applicationContext); err != nil {
@@ -74,6 +96,11 @@ func main() {
 	if os.Getenv("TSZ_EXAMPLE_AUDIT_FAILURE") == "1" {
 		log.Println("BYG example audit fault injection is enabled")
 		auditor = exampleFaultAuditor{}
+	} else if endpoint := os.Getenv("TSZ_AUDIT_WEBHOOK_URL"); endpoint != "" {
+		auditor, err = guardrails.NewWebhookAuditor(endpoint)
+		if err != nil {
+			log.Fatalf("initialize audit webhook: %v", err)
+		}
 	}
 	resolutionMode, err := policyResolutionMode()
 	if err != nil {
@@ -87,16 +114,13 @@ func main() {
 		}
 		resolver = extproc.AttributePolicyResolver{Mapping: bindings}
 	}
-	metricsRegistry := prometheus.NewRegistry()
-	responseStateMetrics, err := observability.NewResponseStateMetrics(metricsRegistry)
-	if err != nil {
-		log.Fatalf("initialize ext-proc metrics: %v", err)
-	}
 	transport, err := envoy.NewServerWithResolverAndSettings(processor, policyCache, resolver, auditor, envoy.ServerSettings{
 		FailMode: policy.FailureMode(extProcConfig.FailMode), MaxBodyBytes: extProcConfig.MaxBodyBytes,
 		MaxStreamBufferBytes:  extProcConfig.MaxStreamBufferBytes,
 		ProcessingTimeout:     extProcConfig.ProcessingTimeout,
-		ResponseStateObserver: responseStateMetrics,
+		ResponseStateObserver: extProcMetrics,
+		MetricsObserver:       extProcMetrics,
+		TraceObserver:         tracing,
 	}, extProcConfig.MaxConcurrentStreams)
 	if err != nil {
 		log.Fatalf("initialize Envoy adapter: %v", err)

@@ -2,16 +2,20 @@ package extproc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"gorm.io/gorm"
@@ -26,10 +30,10 @@ type GRPCRegistrar interface {
 }
 
 type Dependencies struct {
-	DB          *gorm.DB
-	Redis       *redis.Client
-	PolicyCache PolicyCache
-	Registrar   GRPCRegistrar
+	DB             *gorm.DB
+	Redis          *redis.Client
+	PolicyCache    PolicyCache
+	Registrar      GRPCRegistrar
 	MetricsHandler http.Handler
 }
 
@@ -66,10 +70,18 @@ func NewRuntime(cfg *config.ExtProcConfig, dependencies Dependencies) (*Runtime,
 	if cfg.MaxGRPCMessageBytes <= 0 {
 		return nil, errors.New("max gRPC message bytes must be greater than zero")
 	}
-	grpcServer := grpc.NewServer(
+	grpcOptions := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(cfg.MaxGRPCMessageBytes),
 		grpc.MaxSendMsgSize(cfg.MaxGRPCMessageBytes),
-	)
+	}
+	if cfg.GRPCTLSCertFile != "" {
+		tlsConfig, err := loadGRPCMTLSConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		grpcOptions = append(grpcOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))
+	}
+	grpcServer := grpc.NewServer(grpcOptions...)
 	grpcHealth := health.NewServer()
 	healthv1.RegisterHealthServer(grpcServer, grpcHealth)
 	dependencies.Registrar.Register(grpcServer)
@@ -87,6 +99,27 @@ func NewRuntime(cfg *config.ExtProcConfig, dependencies Dependencies) (*Runtime,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return runtime, nil
+}
+
+func loadGRPCMTLSConfig(cfg *config.ExtProcConfig) (*tls.Config, error) {
+	certificate, err := tls.LoadX509KeyPair(cfg.GRPCTLSCertFile, cfg.GRPCTLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load gRPC server certificate: %w", err)
+	}
+	clientCABytes, err := os.ReadFile(cfg.GRPCTLSClientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read gRPC client CA certificate: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(clientCABytes) {
+		return nil, fmt.Errorf("parse gRPC client CA certificate %q: no certificates found", cfg.GRPCTLSClientCAFile)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
+	}, nil
 }
 
 func (r *Runtime) Start() error {

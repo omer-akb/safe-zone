@@ -11,6 +11,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/structpb"
 	. "thyris-sz/internal/extproc"
 )
@@ -261,14 +262,28 @@ func isSSEContentType(contentType string) bool {
 
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {
 	requestID := FirstHeader(headers, "x-request-id")
+	traceParent, traceID := trustedTraceContext(attributes)
 	return ProcessingRequest{
-		EnvoyReqID: requestID, Stage: stage,
+		EnvoyReqID: requestID, TraceID: traceID, TraceParent: traceParent, Stage: stage,
 		Headers: CloneHeaders(headers), Body: append([]byte(nil), body...),
 		ContentType: FirstHeader(headers, "content-type"),
 		Gateway:     FirstHeader(headers, "x-tsz-gateway"), Route: FirstHeader(headers, "x-tsz-route"),
 		Tenant:     FirstHeader(headers, "x-tsz-tenant"),
 		Attributes: attributes,
 	}
+}
+
+func trustedTraceContext(attributes map[string]string) (string, string) {
+	traceParent := strings.TrimSpace(attributes["traceparent"])
+	parts := strings.Split(traceParent, "-")
+	if len(parts) != 4 || len(parts[1]) != 32 {
+		return "", ""
+	}
+	traceID, err := trace.TraceIDFromHex(parts[1])
+	if err != nil || !traceID.IsValid() {
+		return "", ""
+	}
+	return traceParent, traceID.String()
 }
 
 // Policy identity must be resolved from the trusted route header. Legacy

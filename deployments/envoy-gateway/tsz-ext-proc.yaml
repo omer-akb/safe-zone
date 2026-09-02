@@ -109,3 +109,64 @@ spec:
       port: 8080
       targetPort: health
       protocol: TCP
+---
+# Initial production scaling profile. Tune these values with observed request
+# rate, processor latency, CPU, memory, and concurrent-stream metrics.
+# CPU utilization is calculated against the Deployment's CPU request above.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tsz-ext-proc
+  namespace: tsz-byg-demo
+  labels:
+    app.kubernetes.io/name: tsz-ext-proc
+    app.kubernetes.io/part-of: tsz
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tsz-ext-proc
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+---
+# Permit a single voluntary eviction during node drains or cluster upgrades.
+# This works with minReplicas: 2 to retain one available processor replica.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tsz-ext-proc
+  namespace: tsz-byg-demo
+  labels:
+    app.kubernetes.io/name: tsz-ext-proc
+    app.kubernetes.io/part-of: tsz
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tsz-ext-proc
