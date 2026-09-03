@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParseResponsesRequestExtractsSupportedSystemAndUserText(t *testing.T) {
+func TestParseResponsesRequestExtractsSupportedSystemUserAndAssistantText(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "instructions": "top-level system instructions",
@@ -26,8 +26,8 @@ func TestParseResponsesRequestExtractsSupportedSystemAndUserText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.Contents) != 4 {
-		t.Fatalf("request contents = %+v, want four entries", request.Contents)
+	if len(request.Contents) != 5 {
+		t.Fatalf("request contents = %+v, want five entries", request.Contents)
 	}
 	if got := request.Contents[0]; got.ID != 0 || got.Role != "system" || got.JSONPath != ".instructions" || got.Content != "top-level system instructions" {
 		t.Fatalf("instructions content = %+v", got)
@@ -40,6 +40,9 @@ func TestParseResponsesRequestExtractsSupportedSystemAndUserText(t *testing.T) {
 	}
 	if got := request.Contents[3]; got.ID != 3 || got.Role != "user" || got.JSONPath != ".input[2].content[0].text" || got.Content != "structured user text" {
 		t.Fatalf("second user content = %+v", got)
+	}
+	if got := request.Contents[4]; got.ID != 4 || got.Role != "assistant" || got.JSONPath != ".input[3].content[0].text" || got.Content != "previous assistant text" {
+		t.Fatalf("assistant content = %+v", got)
 	}
 }
 
@@ -88,6 +91,7 @@ func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 		{name: "missing user content", contentType: "application/json", body: `{"input":[{"role":"user"}]}`, path: ".input[0].content", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid input text", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid instructions", contentType: "application/json", body: `{"instructions":[],"input":"hello"}`, path: ".instructions", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "invalid assistant output text", contentType: "application/json", body: `{"input":[{"role":"assistant","content":[{"type":"output_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

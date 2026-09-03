@@ -112,7 +112,7 @@ func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 	}
 }
 
-func TestParseChatRequestExtractsSystemAndUserStringContent(t *testing.T) {
+func TestParseChatRequestExtractsSystemUserAndAssistantStringContent(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "messages": [
@@ -129,12 +129,15 @@ func TestParseChatRequestExtractsSystemAndUserStringContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.Contents) != 3 {
-		t.Fatalf("request contents = %+v, want three entries", request.Contents)
+	if len(request.Contents) != 4 {
+		t.Fatalf("request contents = %+v, want four entries", request.Contents)
 	}
-	system, first, second := request.Contents[0], request.Contents[1], request.Contents[2]
+	system, assistant, first, second := request.Contents[0], request.Contents[1], request.Contents[2], request.Contents[3]
 	if system.MessageIndex != 0 || system.Role != "system" || system.JSONPath != ".messages[0].content" || system.Content != "system instructions" {
 		t.Fatalf("system content = %+v", system)
+	}
+	if assistant.MessageIndex != 2 || assistant.Role != "assistant" || assistant.JSONPath != ".messages[2].content" || assistant.Content != "assistant reply" {
+		t.Fatalf("assistant content = %+v", assistant)
 	}
 	if first.MessageIndex != 4 || first.Role != "user" || first.JSONPath != ".messages[4].content" || first.Content != "first user message" {
 		t.Fatalf("first user content = %+v", first)
@@ -150,7 +153,7 @@ func TestChatRequestMutatePreservesUnknownFieldsFormattingAndMessageOrder(t *tes
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.Contents) != 2 || request.Contents[0].MessageIndex != 0 || request.Contents[1].MessageIndex != 1 {
+	if len(request.Contents) != 3 || request.Contents[0].MessageIndex != 0 || request.Contents[1].MessageIndex != 1 || request.Contents[2].MessageIndex != 2 {
 		t.Fatalf("request contents = %+v", request.Contents)
 	}
 	mutated, err := request.Mutate([]ChatContentMutation{{MessageIndex: 0, Content: "safe system"}, {MessageIndex: 1, Content: "masked\ncontent"}})
@@ -187,6 +190,7 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 		{name: "user object content", ctype: "application/json", body: `{"messages":[{"role":"user","content":{"text":"no"}}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user missing content", ctype: "application/json", body: `{"messages":[{"role":"user"}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "system multimodal array", ctype: "application/json", body: `{"messages":[{"role":"system","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "assistant multimodal array", ctype: "application/json", body: `{"messages":[{"role":"assistant","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

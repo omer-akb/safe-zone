@@ -298,13 +298,13 @@ TSZ implements the **request and response shape** of the OpenAI `chat/completion
    - `model`: any model name (forwarded as‑is to upstream)
    - `messages`: array of chat messages
    - `stream`: `false` (standard JSON response) or `true` (SSE streaming)
-2. TSZ runs `/detect` logic on **system and user messages** before calling the LLM:
+2. TSZ runs `/detect` logic on **system, user, and assistant messages** before calling the LLM:
    - PII & secret detection
    - Guardrails / validators (e.g. `TOXIC_LANGUAGE`)
 3. If unsafe on input:
    - TSZ **blocks** the request and returns an OpenAI‑compatible error response.
 4. If safe on input:
-   - TSZ **redacts** sensitive content in system and user messages and forwards the sanitized request to the upstream LLM service.
+   - TSZ **redacts** sensitive content in system, user, and assistant messages and forwards the sanitized request to the upstream LLM service.
 5. For non‑streaming responses (`stream=false`):
    - TSZ runs `/detect` on the assistant output (using the same guardrails).
    - If unsafe, TSZ returns an OpenAI‑compatible error and does not forward the raw LLM response.
@@ -578,14 +578,14 @@ for chunk in stream:
 
 TSZ will:
 
-- Inspect and redact system and user content.
+- Inspect and redact system, user, and assistant content.
 - Forward the sanitized request to the configured upstream LLM service.
 - For non‑streaming calls, apply output guardrails to the full assistant message before returning.
 - For streaming calls, behave according to the chosen `X-TSZ-Guardrails-Mode` and `X-TSZ-Guardrails-OnFail`.
 
 Current limitations:
 
-- String content in `role == "system"` and `role == "user"` messages is scanned and redacted on input; assistant messages are left as-is.
+- String content in `role == "system"`, `role == "user"`, and `role == "assistant"` messages is scanned and redacted on input.
 - Streaming support is focused on **textual content** in `choices[].delta.content`.
 
 #### 3.2.6 Gateway Metadata (`tsz_meta`)
@@ -704,14 +704,13 @@ The supported non-streaming content fields are:
 
 | API | Request fields | Response fields |
 | --- | --- | --- |
-| Chat Completions | String `messages[].content` where `role=system` or `role=user` | String `choices[].message.content` where `role=assistant` |
-| Responses | String `instructions`, string `input`, plus string content and `input_text` parts in `input[]` items where `role=system` or `role=user` | `output_text` parts in `output[]` message items where `role=assistant`; top-level `output_text` is kept consistent when present |
+| Chat Completions | String `messages[].content` where `role=system`, `role=user`, or `role=assistant` | String `choices[].message.content` where `role=assistant` |
+| Responses | String `instructions`, string `input`, string content and `input_text` parts for system/user items, plus string content and `output_text` parts for assistant items in `input[]` | `output_text` parts in `output[]` message items where `role=assistant`; top-level `output_text` is kept consistent when present |
 
 TSZ changes only the extracted text string values and the derived Responses
 API `output_text` value; item order, unknown fields and untouched JSON bytes
-are preserved. Assistant history, tool-call and tool-result payloads,
-multimodal non-text data, and Responses API
-streaming events are not covered by this capability yet.
+are preserved. Tool-call and tool-result payloads, multimodal non-text data,
+and Responses API streaming events are not covered by this capability yet.
 
 | Policy action | Envoy result |
 | --- | --- |

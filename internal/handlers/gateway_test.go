@@ -13,7 +13,7 @@ func (fn gatewayInspectFunc) Inspect(ctx context.Context, input guardrails.Inspe
 	return fn(ctx, input)
 }
 
-func TestApplyInputGuardrailsScansSystemAndUserMessages(t *testing.T) {
+func TestApplyInputGuardrailsScansSystemUserAndAssistantMessages(t *testing.T) {
 	var inspected []string
 	service := gatewayInspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
 		inspected = append(inspected, input.Text)
@@ -29,16 +29,13 @@ func TestApplyInputGuardrailsScansSystemAndUserMessages(t *testing.T) {
 	if blocked {
 		t.Fatal("applyInputGuardrails() unexpectedly blocked")
 	}
-	if len(inspected) != 2 || inspected[0] != "system secret" || inspected[1] != "user secret" {
-		t.Fatalf("inspected = %#v, want system and user content", inspected)
+	if len(inspected) != 3 || inspected[0] != "system secret" || inspected[1] != "assistant history" || inspected[2] != "user secret" {
+		t.Fatalf("inspected = %#v, want system, assistant, and user content", inspected)
 	}
-	if len(responses) != 2 {
-		t.Fatalf("responses = %d, want 2", len(responses))
+	if len(responses) != 3 {
+		t.Fatalf("responses = %d, want 3", len(responses))
 	}
-	if got[0].(map[string]interface{})["content"] != "[MASKED]" || got[2].(map[string]interface{})["content"] != "[MASKED]" {
+	if got[0].(map[string]interface{})["content"] != "[MASKED]" || got[1].(map[string]interface{})["content"] != "[MASKED]" || got[2].(map[string]interface{})["content"] != "[MASKED]" {
 		t.Fatalf("sanitized messages = %#v", got)
-	}
-	if got[1].(map[string]interface{})["content"] != "assistant history" {
-		t.Fatalf("assistant message changed: %#v", got[1])
 	}
 }

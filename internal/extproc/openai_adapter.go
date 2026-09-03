@@ -263,9 +263,9 @@ func (r *ChatResponse) Mutate(mutations []ChatResponseContentMutation) ([]byte, 
 }
 
 // ParseChatRequest accepts only an application/json OpenAI Chat Completions
-// request. It extracts role=user and role=system string content fields and
-// preserves enough source offsets to safely rewrite only those JSON string
-// values later.
+// request. It extracts role=user, role=system, and role=assistant string content
+// fields and preserves enough source offsets to safely rewrite only those JSON
+// string values later.
 func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 	if !isJSONContentType(contentType) {
 		return nil, chatRequestError(ChatRequestUnsupportedType, -1, "", ErrUnsupportedChatContentType)
@@ -296,7 +296,7 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 			return nil, chatRequestError(ChatRequestUnsupportedRequest, index, "", ErrUnsupportedChatRequest)
 		}
 		role := message.object["role"]
-		if role == nil || role.kind != jsonString || (role.stringValue != "user" && role.stringValue != "system") {
+		if role == nil || role.kind != jsonString || !isScannedChatRequestRole(role.stringValue) {
 			continue
 		}
 		content := message.object["content"]
@@ -313,6 +313,10 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 		})
 	}
 	return request, nil
+}
+
+func isScannedChatRequestRole(role string) bool {
+	return role == "system" || role == "user" || role == "assistant"
 }
 
 // Mutate serializes replacements safely while retaining the exact original

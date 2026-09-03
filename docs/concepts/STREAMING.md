@@ -134,14 +134,14 @@ Semantics:
 
 TSZ guardrails are applied at two main stages for the LLM gateway:
 
-1. **Input guardrails** (system and user messages) – always active when `X-TSZ-Guardrails` is set
+1. **Input guardrails** (system, user, and assistant messages) – always active when `X-TSZ-Guardrails` is set
 2. **Output guardrails** (assistant messages) – behaviour depends on streaming mode
 
-### 4.1 Input guardrails (system and user messages)
+### 4.1 Input guardrails (system, user, and assistant messages)
 
 Before calling the upstream LLM, TSZ:
 
-1. Extracts string content from all `messages` with `role == "system"` or `role == "user"`.
+1. Extracts string content from all `messages` with `role == "system"`, `role == "user"`, or `role == "assistant"`.
 2. Runs `/detect` with the configured guardrails (e.g. `TOXIC_LANGUAGE`):
 
    ```go

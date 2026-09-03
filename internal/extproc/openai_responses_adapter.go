@@ -68,9 +68,9 @@ type ResponsesContentMutation struct {
 }
 
 // ResponsesRequest represents the text-only subset introduced in the first
-// Phase 6 slice: top-level string input, instructions, and role=user or
-// role=system message input. Other roles, tool payloads and multimodal fields
-// are intentionally left for their separately tracked Phase 6 capabilities.
+// Phase 6 slice: top-level string input, instructions, and role=user,
+// role=system, or role=assistant message input. Tool payloads and multimodal
+// fields are intentionally left for their separately tracked capabilities.
 type ResponsesRequest struct {
 	Contents []ResponsesTextContent
 	body     []byte
@@ -113,7 +113,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 				return nil, responsesError(ResponsesUnsupportedContent, path, ErrUnsupportedResponsesContent)
 			}
 			role := item.object["role"]
-			if role == nil || role.kind != jsonString || (role.stringValue != "user" && role.stringValue != "system") {
+			if role == nil || role.kind != jsonString || !isScannedResponsesRequestRole(role.stringValue) {
 				continue
 			}
 			content := item.object["content"]
@@ -133,7 +133,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 					if typeNode == nil || typeNode.kind != jsonString {
 						return nil, responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
 					}
-					if typeNode.stringValue != "input_text" {
+					if !isScannedResponsesTextPart(role.stringValue, typeNode.stringValue) {
 						continue
 					}
 					text := part.object["text"]
@@ -150,6 +150,17 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 		return nil, responsesError(ResponsesUnsupportedContent, ".input", ErrUnsupportedResponsesContent)
 	}
 	return request, nil
+}
+
+func isScannedResponsesRequestRole(role string) bool {
+	return role == "system" || role == "user" || role == "assistant"
+}
+
+func isScannedResponsesTextPart(role, partType string) bool {
+	if role == "assistant" {
+		return partType == "output_text"
+	}
+	return partType == "input_text"
 }
 
 func (r *ResponsesRequest) addContent(role, path string, node *jsonNode) {
