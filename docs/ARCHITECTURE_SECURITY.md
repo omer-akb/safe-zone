@@ -178,13 +178,16 @@ Client (untrusted)
 ```
 
 For an allowed response, Envoy forwards the original response. For a masked
-response, TSZ changes only `choices[].message.content` strings. For a blocked
-response, Envoy returns a safe local `403` response instead of the upstream
-body. The raw upstream response may reach Envoy and the internal processor,
-but it is not released to the client before this buffered check completes.
+response, TSZ changes only supported Chat Completions or Responses API text
+fields. For a blocked response, Envoy returns a safe local `403` response
+instead of the upstream body. The raw upstream response may reach Envoy and
+the internal processor, but it is not released to the client before this
+buffered check completes.
 
-This guarantee applies only to buffered, non-streaming OpenAI Chat
-Completions responses. It is not a streaming/SSE safety guarantee.
+This guarantee applies to buffered, non-streaming OpenAI Chat Completions and
+Responses API text fields. Responses API streaming, tool payloads,
+system/developer/assistant input history and multimodal non-text data remain
+outside the current guarantee.
 
 #### Trust boundaries and policy authority
 

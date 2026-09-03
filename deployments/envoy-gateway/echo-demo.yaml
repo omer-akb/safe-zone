@@ -43,6 +43,11 @@ data:
         return 200 '{"id":"chatcmpl-kind-mock","object":"chat.completion","choices":[]}';
       }
 
+      location = /v1/responses {
+        default_type application/json;
+        return 200 '{"id":"resp-kind-mock","object":"response","output":[]}';
+      }
+
       location / {
         default_type application/json;
         return 404 '{"error":"not found"}';
@@ -134,6 +139,9 @@ spec:
         - path:
             type: PathPrefix
             value: /v1/chat/completions
+        - path:
+            type: PathPrefix
+            value: /v1/responses
       # The early ClientTrafficPolicy establishes the fixed value before
       # ext-proc. This late route filter removes it before upstream forwarding.
       filters:

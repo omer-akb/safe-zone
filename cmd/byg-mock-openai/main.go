@@ -32,15 +32,51 @@ type server struct {
 func main() {
 	s := &server{}
 	http.HandleFunc("/v1/chat/completions", s.chat)
+	http.HandleFunc("/v1/responses", s.responses)
 	http.HandleFunc("/inspect", s.inspect)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func (s *server) chat(w http.ResponseWriter, r *http.Request) {
+	if !s.recordRequest(w, r) {
+		return
+	}
+	if os.Getenv("BYG_MOCK_RESPONSE_MODE") == "sse" {
+		s.writeSSEFixture(w)
+		return
+	}
+	content := mockResponseContent()
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl-kind-mock", "object": "chat.completion", "choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}}}})
+}
+
+func (s *server) responses(w http.ResponseWriter, r *http.Request) {
+	if !s.recordRequest(w, r) {
+		return
+	}
+	// Responses SSE events have a different event schema and are intentionally
+	// not simulated until the Responses streaming Phase 6 item is implemented.
+	content := mockResponseContent()
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id": "resp-kind-mock", "object": "response",
+		"output": []any{map[string]any{
+			"id": "msg-kind-mock", "type": "message", "role": "assistant",
+			"content": []any{map[string]string{"type": "output_text", "text": content}},
+		}},
+	})
+}
+
+func (s *server) recordRequest(w http.ResponseWriter, r *http.Request) bool {
+	// Kubernetes readiness probes use GET. They must not be indistinguishable
+	// from a client request in the test-only upstream observation.
+	if r.Method != http.MethodPost {
+		return true
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
 	if err != nil {
 		http.Error(w, `{"error":"request too large"}`, http.StatusRequestEntityTooLarge)
-		return
+		return false
 	}
 	digest := sha256.Sum256(body)
 	s.mu.Lock()
@@ -54,16 +90,15 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 		ContainsSyntheticEmail: strings.Contains(string(body), "demo.user@example.test"),
 	}
 	s.mu.Unlock()
-	if os.Getenv("BYG_MOCK_RESPONSE_MODE") == "sse" {
-		s.writeSSEFixture(w)
-		return
-	}
+	return true
+}
+
+func mockResponseContent() string {
 	content := os.Getenv("BYG_MOCK_RESPONSE_CONTENT")
 	if content == "" {
-		content = "safe mock response"
+		return "safe mock response"
 	}
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": "chatcmpl-kind-mock", "object": "chat.completion", "choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}}}})
+	return content
 }
 
 // writeSSEFixture serves a checked-in OpenAI-compatible SSE fixture. The

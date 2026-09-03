@@ -303,6 +303,109 @@ func TestOpenAIRequestProcessorBlocksAssistantResponseWithForbiddenStatus(t *tes
 	}
 }
 
+func TestOpenAIRequestProcessorMasksResponsesAPIStringInput(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if input.Text == "contact alice@example.com" {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "contact [MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{"model":"gpt-test","input":"contact alice@example.com","unknown":{"keep":true}}`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		RID: "rid-responses", EnvoyReqID: "envoy-responses", Stage: StageRequest, ContentType: "application/json", Body: body,
+		PolicyID: "default", PolicyVersion: 6, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 6, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	want := `{"model":"gpt-test","input":"contact [MASKED]","unknown":{"keep":true}}`
+	if result.Action != ActionMask || string(result.Body) != want || result.HeaderMutations["content-length"] != strconv.Itoa(len(result.Body)) {
+		t.Fatalf("Responses API request result = %+v body=%s", result, result.Body)
+	}
+	if result.Metadata.Adapter != "openai_responses" || result.Metadata.PolicyVersion != 6 || result.Metadata.DetectionCount != 1 {
+		t.Fatalf("Responses API metadata = %+v", result.Metadata)
+	}
+}
+
+func TestOpenAIRequestProcessorUsesStrongestActionAcrossResponsesAPIInputItems(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		switch input.Text {
+		case "mask":
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		case "block":
+			return guardrails.InspectResult{Action: guardrails.RuleActionBlock, DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+		default:
+			return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+		}
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{"input":[{"role":"user","content":"mask"},{"role":"user","content":[{"type":"input_text","text":"block"}]}]}`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json", Body: body,
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionBlock || result.DetectionCount != 2 || result.Body != nil || result.HeaderMutations != nil {
+		t.Fatalf("strongest Responses API request result = %+v", result)
+	}
+}
+
+func TestOpenAIRequestProcessorMasksResponsesAPIOutputAndConvenienceText(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if input.Text == "secret@example.com" {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{"id":"resp_1","object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"secret@example.com","annotations":[]}]}],"output_text":"secret@example.com","usage":{"total_tokens":3}}`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		RID: "rid-output", Stage: StageResponse, ContentType: "application/json", Body: body,
+		PolicyID: "default", PolicyVersion: 6, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 6, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionMask || result.DetectionCount != 1 || result.Metadata.Adapter != "openai_responses" {
+		t.Fatalf("Responses API response result = %+v", result)
+	}
+	if strings.Contains(string(result.Body), "secret@example.com") || strings.Count(string(result.Body), "[MASKED]") != 2 {
+		t.Fatalf("masked Responses API response = %s", result.Body)
+	}
+	if result.HeaderMutations["content-length"] != strconv.Itoa(len(result.Body)) {
+		t.Fatalf("content-length = %q, want %d", result.HeaderMutations["content-length"], len(result.Body))
+	}
+}
+
+func TestOpenAIRequestProcessorBlocksResponsesAPIOutput(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(context.Context, guardrails.InspectInput) (guardrails.InspectResult, error) {
+		return guardrails.InspectResult{Action: guardrails.RuleActionBlock, DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageResponse, ContentType: "application/json",
+		Body:           []byte(`{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"secret"}]}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionBlock || result.ImmediateStatus != 403 || result.Body != nil || result.HeaderMutations != nil {
+		t.Fatalf("blocked Responses API response = %+v", result)
+	}
+}
+
 func compiledPolicyProcessor(t *testing.T) *OpenAIRequestProcessor {
 	t.Helper()
 	service, err := guardrails.NewGuardrailService(&guardrails.Detector{})

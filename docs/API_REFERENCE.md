@@ -693,16 +693,25 @@ Gateway API **v1.5.1**. Installation and profile selection are documented in
 
 #### Response contract
 
-For a strict no-leakage guarantee, use this buffered, non-streaming OpenAI
-Chat Completions profile. The request must use `Content-Type: application/json`;
-streaming requests and unsupported content shapes are processing failures, not
-silently allowed content. The separate Envoy BYG `Windowed` SSE mode is
-best-effort only: it cannot retract content that Envoy has already sent and is
-not a strict-streaming substitute.
+For a strict no-leakage guarantee, use buffered, non-streaming OpenAI Chat
+Completions or Responses API traffic. The request must use
+`Content-Type: application/json`; unsupported content shapes are processing
+failures, not silently allowed content. The separate Envoy BYG `Windowed` SSE
+mode currently understands Chat Completions events only and is best-effort: it
+cannot retract content that Envoy has already sent.
 
-On the response path TSZ reads every string value at
-`choices[].message.content` where `message.role` is `assistant`. It changes
-only those values; choice order and all other JSON fields are preserved.
+The supported non-streaming content fields are:
+
+| API | Request fields | Response fields |
+| --- | --- | --- |
+| Chat Completions | String `messages[].content` where `role=user` | String `choices[].message.content` where `role=assistant` |
+| Responses | String `input`, plus string content and `input_text` parts in `input[]` items where `role=user` | `output_text` parts in `output[]` message items where `role=assistant`; top-level `output_text` is kept consistent when present |
+
+TSZ changes only the extracted text string values and the derived Responses
+API `output_text` value; item order, unknown fields and untouched JSON bytes
+are preserved. Responses API instructions, system/developer/assistant history,
+tool-call and tool-result payloads, multimodal non-text data, and Responses API
+streaming events are not covered by this capability yet.
 
 | Policy action | Envoy result |
 | --- | --- |
@@ -711,9 +720,10 @@ only those values; choice order and all other JSON fields are preserved.
 | `MASK` | Replace only the unsafe assistant-content strings and update `content-length`. |
 | `BLOCK` | Replace the upstream response with a safe local `403` response. |
 
-This scope does **not** guarantee streaming response enforcement. Configure
-both request and response bodies as `Buffered`; do not attach this profile to
-a route that requires an unbuffered or SSE safety guarantee.
+This scope does **not** guarantee Responses API streaming enforcement.
+Configure both request and response bodies as `Buffered`; do not attach this
+profile to a route that requires an unbuffered or Responses SSE safety
+guarantee.
 
 #### Envoy attachment and runtime settings
 

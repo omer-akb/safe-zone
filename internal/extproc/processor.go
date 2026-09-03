@@ -2,6 +2,7 @@ package extproc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -69,8 +70,8 @@ func (p *OpenAIRequestProcessor) Process(ctx context.Context, request Processing
 		return ProcessingResult{}, err
 	}
 	// Headers, empty bodies and routes without a loaded snapshot are protocol
-	// ALLOW paths. Response enforcement is limited to buffered non-streaming
-	// Chat Completions bodies.
+	// ALLOW paths. Buffered Chat Completions and Responses API bodies are
+	// enforced here; streaming continues through the optional window processor.
 	if request.Body == nil || request.PolicySnapshot == nil {
 		return ProcessingResult{Action: ActionAllow}, nil
 	}
@@ -160,9 +161,20 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
 	chat, err := ParseChatRequest(request.ContentType, request.Body)
-	if err != nil {
+	if err == nil {
+		return p.processChatRequest(ctx, request, chat)
+	}
+	if !errors.Is(err, ErrUnsupportedChatRequest) {
 		return ProcessingResult{}, err
 	}
+	responses, responsesErr := ParseResponsesRequest(request.ContentType, request.Body)
+	if responsesErr != nil {
+		return ProcessingResult{}, responsesErr
+	}
+	return p.processResponsesRequest(ctx, request, responses)
+}
+
+func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request ProcessingRequest, chat *ChatRequest) (ProcessingResult, error) {
 	rules, err := compiledGuardrailRules(*request.PolicySnapshot)
 	if err != nil {
 		return ProcessingResult{}, err
@@ -215,9 +227,20 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 
 func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
 	chat, err := ParseChatResponse(request.ContentType, request.Body)
-	if err != nil {
+	if err == nil {
+		return p.processChatResponse(ctx, request, chat)
+	}
+	if !errors.Is(err, ErrUnsupportedChatResponse) {
 		return ProcessingResult{}, err
 	}
+	responses, responsesErr := ParseResponsesResponse(request.ContentType, request.Body)
+	if responsesErr != nil {
+		return ProcessingResult{}, responsesErr
+	}
+	return p.processResponsesResponse(ctx, request, responses)
+}
+
+func (p *OpenAIRequestProcessor) processChatResponse(ctx context.Context, request ProcessingRequest, chat *ChatResponse) (ProcessingResult, error) {
 	rules, err := compiledResponseGuardrailRules(*request.PolicySnapshot)
 	if err != nil {
 		return ProcessingResult{}, err
@@ -269,6 +292,103 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 	result.Body = body
 	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
 	return result, nil
+}
+
+func (p *OpenAIRequestProcessor) processResponsesRequest(ctx context.Context, request ProcessingRequest, responses *ResponsesRequest) (ProcessingResult, error) {
+	rules, err := compiledGuardrailRules(*request.PolicySnapshot)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categorySet := make(map[string]struct{})
+	mutations := make([]ResponsesContentMutation, 0)
+	started := time.Now()
+	for _, content := range responses.UserContents {
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if err != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect Responses API input %s: %w", content.JSONPath, err)
+		}
+		action, err := actionFromGuardrail(inspection.Action)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categorySet[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = openAIResultMetadata(request, "openai_responses", result, categorySet, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		return result, nil
+	}
+	body, err := responses.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func (p *OpenAIRequestProcessor) processResponsesResponse(ctx context.Context, request ProcessingRequest, responses *ResponsesResponse) (ProcessingResult, error) {
+	rules, err := compiledResponseGuardrailRules(*request.PolicySnapshot)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categorySet := make(map[string]struct{})
+	mutations := make([]ResponsesContentMutation, 0)
+	started := time.Now()
+	for _, content := range responses.AssistantContents {
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if err != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect Responses API output %s: %w", content.JSONPath, err)
+		}
+		action, err := actionFromGuardrail(inspection.Action)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categorySet[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = openAIResultMetadata(request, "openai_responses", result, categorySet, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		if result.Action == ActionBlock {
+			result.ImmediateStatus = 403
+		}
+		return result, nil
+	}
+	body, err := responses.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func openAIResultMetadata(request ProcessingRequest, adapter string, result ProcessingResult, categories map[string]struct{}, started time.Time) SafeMetadata {
+	metadata := SafeMetadata{
+		RequestID: request.EnvoyReqID, RID: request.RID, PolicyID: request.PolicyID,
+		PolicyVersion: request.PolicyVersion, Adapter: adapter, Stage: request.Stage,
+		Action: result.Action, DetectionCount: result.DetectionCount,
+		ProcessorLatencyMS: time.Since(started).Milliseconds(),
+	}
+	for category := range categories {
+		metadata.Categories = append(metadata.Categories, category)
+	}
+	sort.Strings(metadata.Categories)
+	return metadata
 }
 
 // inspectWithTrace creates a latency span around deterministic and semantic
