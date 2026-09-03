@@ -6,11 +6,12 @@ import (
 	"testing"
 )
 
-func TestParseResponsesRequestExtractsSupportedUserText(t *testing.T) {
+func TestParseResponsesRequestExtractsSupportedSystemAndUserText(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
+  "instructions": "top-level system instructions",
   "input": [
-    {"role":"system","content":"not part of this capability"},
+    {"role":"system","content":"system message"},
     {"type":"message","role":"user","content":"plain user text"},
     {"type":"message","role":"user","content":[
       {"type":"input_text","text":"structured user text"},
@@ -25,13 +26,19 @@ func TestParseResponsesRequestExtractsSupportedUserText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 2 {
-		t.Fatalf("user contents = %+v, want two entries", request.UserContents)
+	if len(request.Contents) != 4 {
+		t.Fatalf("request contents = %+v, want four entries", request.Contents)
 	}
-	if got := request.UserContents[0]; got.ID != 0 || got.JSONPath != ".input[1].content" || got.Content != "plain user text" {
+	if got := request.Contents[0]; got.ID != 0 || got.Role != "system" || got.JSONPath != ".instructions" || got.Content != "top-level system instructions" {
+		t.Fatalf("instructions content = %+v", got)
+	}
+	if got := request.Contents[1]; got.ID != 1 || got.Role != "system" || got.JSONPath != ".input[0].content" || got.Content != "system message" {
+		t.Fatalf("system content = %+v", got)
+	}
+	if got := request.Contents[2]; got.ID != 2 || got.Role != "user" || got.JSONPath != ".input[1].content" || got.Content != "plain user text" {
 		t.Fatalf("first user content = %+v", got)
 	}
-	if got := request.UserContents[1]; got.ID != 1 || got.JSONPath != ".input[2].content[0].text" || got.Content != "structured user text" {
+	if got := request.Contents[3]; got.ID != 3 || got.Role != "user" || got.JSONPath != ".input[2].content[0].text" || got.Content != "structured user text" {
 		t.Fatalf("second user content = %+v", got)
 	}
 }
@@ -41,8 +48,8 @@ func TestParseResponsesRequestAcceptsStringInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 1 || request.UserContents[0].JSONPath != ".input" || request.UserContents[0].Content != "hello" {
-		t.Fatalf("user contents = %+v", request.UserContents)
+	if len(request.Contents) != 1 || request.Contents[0].JSONPath != ".input" || request.Contents[0].Content != "hello" {
+		t.Fatalf("request contents = %+v", request.Contents)
 	}
 }
 
@@ -80,6 +87,7 @@ func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 		{name: "object input", contentType: "application/json", body: `{"input":{}}`, path: ".input", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "missing user content", contentType: "application/json", body: `{"input":[{"role":"user"}]}`, path: ".input[0].content", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid input text", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "invalid instructions", contentType: "application/json", body: `{"instructions":[],"input":"hello"}`, path: ".instructions", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -100,8 +108,18 @@ func TestParseResponsesRequestAllowsConversationContinuationWithoutNewInput(t *t
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 0 {
-		t.Fatalf("user contents = %+v, want none", request.UserContents)
+	if len(request.Contents) != 0 {
+		t.Fatalf("request contents = %+v, want none", request.Contents)
+	}
+}
+
+func TestParseResponsesRequestAcceptsInstructionsWithoutInput(t *testing.T) {
+	request, err := ParseResponsesRequest("application/json", []byte(`{"model":"gpt-test","instructions":"protect this context"}`))
+	if err != nil {
+		t.Fatalf("ParseResponsesRequest() error = %v", err)
+	}
+	if len(request.Contents) != 1 || request.Contents[0].Role != "system" || request.Contents[0].JSONPath != ".instructions" {
+		t.Fatalf("request contents = %+v", request.Contents)
 	}
 }
 

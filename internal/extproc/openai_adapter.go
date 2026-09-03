@@ -84,17 +84,19 @@ func (e *ChatResponseError) Error() string {
 
 func (e *ChatResponseError) Unwrap() error { return e.Err }
 
-// ChatUserContent identifies one supported mutable field in a Chat Completions
-// request. JSONPath is stable for diagnostics and does not contain content.
-type ChatUserContent struct {
+// ChatRequestContent identifies one supported mutable field in a Chat
+// Completions request. JSONPath is stable for diagnostics and does not contain
+// content.
+type ChatRequestContent struct {
 	MessageIndex int
+	Role         string
 	JSONPath     string
 	Content      string
 	valueStart   int
 	valueEnd     int
 }
 
-// ChatContentMutation replaces exactly one user content field identified by
+// ChatContentMutation replaces exactly one request content field identified by
 // MessageIndex. Mutations can only target entries returned by ParseChatRequest.
 type ChatContentMutation struct {
 	MessageIndex int
@@ -105,8 +107,8 @@ type ChatContentMutation struct {
 // an OpenAI Chat Completions request. Its raw body remains private so callers
 // can only produce mutations through the checked method below.
 type ChatRequest struct {
-	UserContents []ChatUserContent
-	body         []byte
+	Contents []ChatRequestContent
+	body     []byte
 }
 
 // ChatAssistantContent identifies one supported assistant content field in a
@@ -261,8 +263,9 @@ func (r *ChatResponse) Mutate(mutations []ChatResponseContentMutation) ([]byte, 
 }
 
 // ParseChatRequest accepts only an application/json OpenAI Chat Completions
-// request. It extracts role=user string content fields and preserves enough
-// source offsets to safely rewrite only those JSON string values later.
+// request. It extracts role=user and role=system string content fields and
+// preserves enough source offsets to safely rewrite only those JSON string
+// values later.
 func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 	if !isJSONContentType(contentType) {
 		return nil, chatRequestError(ChatRequestUnsupportedType, -1, "", ErrUnsupportedChatContentType)
@@ -293,15 +296,16 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 			return nil, chatRequestError(ChatRequestUnsupportedRequest, index, "", ErrUnsupportedChatRequest)
 		}
 		role := message.object["role"]
-		if role == nil || role.kind != jsonString || role.stringValue != "user" {
+		if role == nil || role.kind != jsonString || (role.stringValue != "user" && role.stringValue != "system") {
 			continue
 		}
 		content := message.object["content"]
 		if content == nil || content.kind != jsonString {
 			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".content", ErrUnsupportedChatContent)
 		}
-		request.UserContents = append(request.UserContents, ChatUserContent{
+		request.Contents = append(request.Contents, ChatRequestContent{
 			MessageIndex: index,
+			Role:         role.stringValue,
 			JSONPath:     path,
 			Content:      content.stringValue,
 			valueStart:   content.start,
@@ -320,8 +324,8 @@ func (r *ChatRequest) Mutate(mutations []ChatContentMutation) ([]byte, error) {
 	if len(mutations) == 0 {
 		return append([]byte(nil), r.body...), nil
 	}
-	targets := make(map[int]ChatUserContent, len(r.UserContents))
-	for _, target := range r.UserContents {
+	targets := make(map[int]ChatRequestContent, len(r.Contents))
+	for _, target := range r.Contents {
 		targets[target.MessageIndex] = target
 	}
 	replacements := make(map[int][]byte, len(mutations))
@@ -340,7 +344,7 @@ func (r *ChatRequest) Mutate(mutations []ChatContentMutation) ([]byte, error) {
 	}
 	result := make([]byte, 0, len(r.body))
 	cursor := 0
-	for _, target := range r.UserContents {
+	for _, target := range r.Contents {
 		replacement, changed := replacements[target.MessageIndex]
 		if !changed {
 			continue

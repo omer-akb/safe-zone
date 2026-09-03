@@ -55,6 +55,7 @@ func responsesError(kind ResponsesErrorKind, path string, err error) *ResponsesE
 // stable integer ID is used instead of trusting caller-supplied JSON paths.
 type ResponsesTextContent struct {
 	ID       int
+	Role     string
 	JSONPath string
 	Content  string
 	start    int
@@ -67,17 +68,17 @@ type ResponsesContentMutation struct {
 }
 
 // ResponsesRequest represents the text-only subset introduced in the first
-// Phase 6 slice: top-level string input and role=user message input. Other
-// roles, tool payloads and multimodal fields are intentionally left for their
-// separately tracked Phase 6 capabilities.
+// Phase 6 slice: top-level string input, instructions, and role=user or
+// role=system message input. Other roles, tool payloads and multimodal fields
+// are intentionally left for their separately tracked Phase 6 capabilities.
 type ResponsesRequest struct {
-	UserContents []ResponsesTextContent
-	body         []byte
+	Contents []ResponsesTextContent
+	body     []byte
 }
 
-// ParseResponsesRequest extracts supported user text while retaining source
-// offsets so mutations leave all unrelated and unknown JSON byte-for-byte
-// unchanged.
+// ParseResponsesRequest extracts supported system and user text while retaining
+// source offsets so mutations leave all unrelated and unknown JSON
+// byte-for-byte unchanged.
 func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, error) {
 	root, err := parseResponsesDocument(contentType, body)
 	if err != nil {
@@ -85,6 +86,12 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 	}
 	input := root.object["input"]
 	request := &ResponsesRequest{body: append([]byte(nil), body...)}
+	if instructions := root.object["instructions"]; instructions != nil {
+		if instructions.kind != jsonString {
+			return nil, responsesError(ResponsesUnsupportedContent, ".instructions", ErrUnsupportedResponsesContent)
+		}
+		request.addContent("system", ".instructions", instructions)
+	}
 	// Responses can continue a stored conversation or previous response without
 	// supplying new input. Require a Responses-specific context field so an
 	// invalid Chat Completions payload cannot be misclassified and allowed.
@@ -98,7 +105,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 	}
 	switch input.kind {
 	case jsonString:
-		request.addUserContent(".input", input)
+		request.addContent("user", ".input", input)
 	case jsonArray:
 		for itemIndex, item := range input.array {
 			path := fmt.Sprintf(".input[%d]", itemIndex)
@@ -106,7 +113,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 				return nil, responsesError(ResponsesUnsupportedContent, path, ErrUnsupportedResponsesContent)
 			}
 			role := item.object["role"]
-			if role == nil || role.kind != jsonString || role.stringValue != "user" {
+			if role == nil || role.kind != jsonString || (role.stringValue != "user" && role.stringValue != "system") {
 				continue
 			}
 			content := item.object["content"]
@@ -115,7 +122,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 			}
 			switch content.kind {
 			case jsonString:
-				request.addUserContent(path+".content", content)
+				request.addContent(role.stringValue, path+".content", content)
 			case jsonArray:
 				for contentIndex, part := range content.array {
 					partPath := fmt.Sprintf("%s.content[%d]", path, contentIndex)
@@ -133,7 +140,7 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 					if text == nil || text.kind != jsonString {
 						return nil, responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
 					}
-					request.addUserContent(partPath+".text", text)
+					request.addContent(role.stringValue, partPath+".text", text)
 				}
 			default:
 				return nil, responsesError(ResponsesUnsupportedContent, path+".content", ErrUnsupportedResponsesContent)
@@ -145,9 +152,9 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 	return request, nil
 }
 
-func (r *ResponsesRequest) addUserContent(path string, node *jsonNode) {
-	r.UserContents = append(r.UserContents, ResponsesTextContent{
-		ID: len(r.UserContents), JSONPath: path, Content: node.stringValue, start: node.start, end: node.end,
+func (r *ResponsesRequest) addContent(role, path string, node *jsonNode) {
+	r.Contents = append(r.Contents, ResponsesTextContent{
+		ID: len(r.Contents), Role: role, JSONPath: path, Content: node.stringValue, start: node.start, end: node.end,
 	})
 }
 
@@ -155,7 +162,7 @@ func (r *ResponsesRequest) Mutate(mutations []ResponsesContentMutation) ([]byte,
 	if r == nil {
 		return nil, responsesError(ResponsesInvalidMutation, "", ErrInvalidResponsesMutation)
 	}
-	return mutateResponsesContents(r.body, r.UserContents, mutations, nil)
+	return mutateResponsesContents(r.body, r.Contents, mutations, nil)
 }
 
 // ResponsesResponse represents assistant output_text blocks in a buffered

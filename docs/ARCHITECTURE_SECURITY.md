@@ -185,8 +185,9 @@ the internal processor, but it is not released to the client before this
 buffered check completes.
 
 This guarantee applies to buffered, non-streaming OpenAI Chat Completions and
-Responses API text fields. Responses API streaming, tool payloads,
-system/developer/assistant input history and multimodal non-text data remain
+Responses API text fields, including system messages and Responses API
+`instructions`. Responses API streaming, tool payloads, assistant input
+history and multimodal non-text data remain
 outside the current guarantee.
 
 #### Trust boundaries and policy authority

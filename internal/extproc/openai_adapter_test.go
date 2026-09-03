@@ -112,7 +112,7 @@ func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 	}
 }
 
-func TestParseChatRequestExtractsOnlyUserStringContent(t *testing.T) {
+func TestParseChatRequestExtractsSystemAndUserStringContent(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "messages": [
@@ -129,32 +129,36 @@ func TestParseChatRequestExtractsOnlyUserStringContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 2 {
-		t.Fatalf("user contents = %+v, want two entries", request.UserContents)
+	if len(request.Contents) != 3 {
+		t.Fatalf("request contents = %+v, want three entries", request.Contents)
 	}
-	first, second := request.UserContents[0], request.UserContents[1]
-	if first.MessageIndex != 4 || first.JSONPath != ".messages[4].content" || first.Content != "first user message" {
+	system, first, second := request.Contents[0], request.Contents[1], request.Contents[2]
+	if system.MessageIndex != 0 || system.Role != "system" || system.JSONPath != ".messages[0].content" || system.Content != "system instructions" {
+		t.Fatalf("system content = %+v", system)
+	}
+	if first.MessageIndex != 4 || first.Role != "user" || first.JSONPath != ".messages[4].content" || first.Content != "first user message" {
 		t.Fatalf("first user content = %+v", first)
 	}
-	if second.MessageIndex != 5 || second.JSONPath != ".messages[5].content" || second.Content != "second user message" {
+	if second.MessageIndex != 5 || second.Role != "user" || second.JSONPath != ".messages[5].content" || second.Content != "second user message" {
 		t.Fatalf("second user content = %+v", second)
 	}
 }
 
 func TestChatRequestMutatePreservesUnknownFieldsFormattingAndMessageOrder(t *testing.T) {
-	body := []byte(`{ "model" : "gpt-test", "unknown" : { "array" : [ 1, 2 ] }, "messages" : [ { "role" : "system", "content" : [ { "type" : "text", "text" : "leave unchanged" } ] }, { "role" : "user", "content" : "replace me", "extra" : { "x" : true } }, { "role" : "assistant", "content" : "leave assistant" } ], "stream" : false }`)
+	body := []byte(`{ "model" : "gpt-test", "unknown" : { "array" : [ 1, 2 ] }, "messages" : [ { "role" : "system", "content" : "replace system" }, { "role" : "user", "content" : "replace me", "extra" : { "x" : true } }, { "role" : "assistant", "content" : "leave assistant" } ], "stream" : false }`)
 	request, err := ParseChatRequest("application/json", body)
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 1 || request.UserContents[0].MessageIndex != 1 {
-		t.Fatalf("user contents = %+v", request.UserContents)
+	if len(request.Contents) != 2 || request.Contents[0].MessageIndex != 0 || request.Contents[1].MessageIndex != 1 {
+		t.Fatalf("request contents = %+v", request.Contents)
 	}
-	mutated, err := request.Mutate([]ChatContentMutation{{MessageIndex: 1, Content: "masked\ncontent"}})
+	mutated, err := request.Mutate([]ChatContentMutation{{MessageIndex: 0, Content: "safe system"}, {MessageIndex: 1, Content: "masked\ncontent"}})
 	if err != nil {
 		t.Fatalf("Mutate() error = %v", err)
 	}
-	want := strings.Replace(string(body), `"replace me"`, `"masked\ncontent"`, 1)
+	want := strings.Replace(string(body), `"replace system"`, `"safe system"`, 1)
+	want = strings.Replace(want, `"replace me"`, `"masked\ncontent"`, 1)
 	if string(mutated) != want {
 		t.Fatalf("mutated body changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
 	}
@@ -182,6 +186,7 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 		{name: "user multimodal array", ctype: "application/json", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user object content", ctype: "application/json", body: `{"messages":[{"role":"user","content":{"text":"no"}}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user missing content", ctype: "application/json", body: `{"messages":[{"role":"user"}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "system multimodal array", ctype: "application/json", body: `{"messages":[{"role":"system","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -202,8 +207,8 @@ func TestParseChatRequestAcceptsStreamingRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.UserContents) != 1 || request.UserContents[0].Content != "safe" {
-		t.Fatalf("user contents = %+v", request.UserContents)
+	if len(request.Contents) != 1 || request.Contents[0].Content != "safe" {
+		t.Fatalf("request contents = %+v", request.Contents)
 	}
 }
 

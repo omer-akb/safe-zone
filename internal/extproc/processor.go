@@ -183,10 +183,10 @@ func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request
 	categorySet := make(map[string]struct{})
 	mutations := make([]ChatContentMutation, 0)
 	started := time.Now()
-	for _, content := range chat.UserContents {
+	for _, content := range chat.Contents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
-			return ProcessingResult{}, fmt.Errorf("inspect user message %d: %w", content.MessageIndex, err)
+			return ProcessingResult{}, fmt.Errorf("inspect %s message %d: %w", content.Role, content.MessageIndex, err)
 		}
 		action, err := actionFromGuardrail(inspection.Action)
 		if err != nil {
@@ -303,7 +303,7 @@ func (p *OpenAIRequestProcessor) processResponsesRequest(ctx context.Context, re
 	categorySet := make(map[string]struct{})
 	mutations := make([]ResponsesContentMutation, 0)
 	started := time.Now()
-	for _, content := range responses.UserContents {
+	for _, content := range responses.Contents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
 			return ProcessingResult{}, fmt.Errorf("inspect Responses API input %s: %w", content.JSONPath, err)

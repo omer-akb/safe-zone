@@ -23,7 +23,7 @@ import (
 //
 // Flow:
 //  1. Parse the incoming OpenAI-style chat request (model, messages, stream, ...)
-//  2. Run TSZ detection/guardrails on user messages (input guardrails)
+//  2. Run TSZ detection/guardrails on system and user messages (input guardrails)
 //  3. Optionally block or redact the request
 //  4. Forward the sanitized request to the upstream OpenAI-compatible endpoint
 //  5. For non-streaming calls, optionally apply guardrails on assistant output
@@ -54,7 +54,7 @@ func NewOpenAIChatGateway(service guardrails.GuardrailService) http.HandlerFunc 
 		mode, onFail := extractGatewayStreamOptions(r)
 		log.Printf("[gateway] RID=%s stream=%v mode=%s onFail=%s guardrails=%v gateway_block_mode=%s", rid, stream, mode, onFail, guardrailsList, config.AppConfig.GatewayBlockMode)
 
-		// 3) Apply input guardrails on user messages
+		// 3) Apply input guardrails on system and user messages
 		sanitizedMessages, blocked, blockMessage, inputDetects := applyInputGuardrails(r.Context(), service, messages, rid, guardrailsList)
 		if blocked {
 			triggeredGuardrails := computeTriggeredGuardrails(inputDetects, nil)
@@ -201,7 +201,7 @@ func extractGatewayStreamOptions(r *http.Request) (mode, onFail string) {
 	return mode, onFail
 }
 
-// applyInputGuardrails runs detection/guardrails on user messages and returns sanitized messages.
+// applyInputGuardrails runs detection/guardrails on system and user messages and returns sanitized messages.
 func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailService, messages []interface{}, rid string, guardrailsList []string) ([]interface{}, bool, string, []models.DetectResponse) {
 	blocked := false
 	blockMessage := ""
@@ -219,8 +219,7 @@ func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailServi
 			continue
 		}
 
-		// For now we only scan user messages
-		if role != "user" {
+		if role != "user" && role != "system" {
 			continue
 		}
 
