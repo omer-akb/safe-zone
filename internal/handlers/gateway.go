@@ -246,7 +246,60 @@ func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailServi
 			}
 		}
 		if role == "user" || role == "system" || role == "assistant" || role == "tool" {
-			if content, ok := msgMap["content"].(string); ok && !inspect(content, func(value string) { msgMap["content"] = value }) {
+			switch content := msgMap["content"].(type) {
+			case string:
+				if !inspect(content, func(value string) { msgMap["content"] = value }) {
+					break
+				}
+			case []interface{}:
+				if len(content) == 0 {
+					blocked, blockMessage = true, "Unsupported multimodal content payload"
+					break
+				}
+				for partIndex, rawPart := range content {
+					part, partOK := rawPart.(map[string]interface{})
+					partType, typeOK := part["type"].(string)
+					if !partOK || !typeOK {
+						blocked, blockMessage = true, "Unsupported multimodal content payload"
+						break
+					}
+					field := ""
+					switch partType {
+					case "text":
+						field = "text"
+					case "refusal":
+						if role == "assistant" {
+							field = "refusal"
+						}
+					case "image_url", "input_audio", "file":
+						if role == "user" {
+							if _, hasText := part["text"]; !hasText {
+								continue
+							}
+						}
+					}
+					text, textOK := part[field].(string)
+					if field == "" || !textOK {
+						blocked, blockMessage = true, "Unsupported multimodal content payload"
+						break
+					}
+					targetPart := part
+					if !inspect(text, func(value string) { targetPart[field] = value }) {
+						break
+					}
+					content[partIndex] = part
+				}
+				if blocked {
+					break
+				}
+			case nil:
+				if role != "assistant" || msgMap["tool_calls"] == nil {
+					blocked, blockMessage = true, "Unsupported message content payload"
+				}
+			default:
+				blocked, blockMessage = true, "Unsupported message content payload"
+			}
+			if blocked {
 				break
 			}
 		}
@@ -335,8 +388,43 @@ func processNonStreamResponse(ctx context.Context, service guardrails.GuardrailS
 					apply func(string)
 				}
 				var targets []outputTarget
-				if content, ok := msg["content"].(string); ok && content != "" {
-					targets = append(targets, outputTarget{text: content, apply: func(value string) { msg["content"] = value }})
+				switch content := msg["content"].(type) {
+				case string:
+					if content != "" {
+						targets = append(targets, outputTarget{text: content, apply: func(value string) { msg["content"] = value }})
+					}
+				case []interface{}:
+					if len(content) == 0 {
+						writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream multimodal content payload", "guardrail_error")
+						return
+					}
+					for _, rawPart := range content {
+						part, partOK := rawPart.(map[string]interface{})
+						partType, typeOK := part["type"].(string)
+						if !partOK || !typeOK || (partType != "text" && partType != "refusal") {
+							writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream multimodal content payload", "guardrail_error")
+							return
+						}
+						field := "text"
+						if partType == "refusal" {
+							field = "refusal"
+						}
+						text, textOK := part[field].(string)
+						if !textOK {
+							writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream multimodal content payload", "guardrail_error")
+							return
+						}
+						targetPart, targetField := part, field
+						targets = append(targets, outputTarget{text: text, apply: func(value string) { targetPart[targetField] = value }})
+					}
+				case nil:
+					if msg["tool_calls"] == nil {
+						writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream message content payload", "guardrail_error")
+						return
+					}
+				default:
+					writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream message content payload", "guardrail_error")
+					return
 				}
 				toolCalls, toolCallsOK := msg["tool_calls"].([]interface{})
 				if _, present := msg["tool_calls"]; present && !toolCallsOK {

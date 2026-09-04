@@ -100,6 +100,25 @@ func TestResponsesRequestMutatesFunctionCallsAndOutputs(t *testing.T) {
 	}
 }
 
+func TestResponsesRequestMutatesMultimodalToolOutputTextOnly(t *testing.T) {
+	body := []byte(`{ "input" : [ { "type" : "function_call_output", "call_id" : "call_1", "output" : [ { "type" : "input_text", "text" : "secret result" }, { "type" : "input_image", "image_url" : "data:image/png;base64,AAAA" }, { "type" : "input_file", "file_id" : "file_1" } ] } ] }`)
+	request, err := ParseResponsesRequest("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseResponsesRequest() error = %v", err)
+	}
+	if len(request.Contents) != 1 || request.Contents[0].JSONPath != ".input[0].output[0].text" || request.Contents[0].Role != "tool_result" {
+		t.Fatalf("request contents = %+v", request.Contents)
+	}
+	mutated, err := request.Mutate([]ResponsesContentMutation{{ID: request.Contents[0].ID, Content: "[MASKED]"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"secret result"`, `"[MASKED]"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated tool result changed non-text parts\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
 func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 	tests := []struct {
 		name, contentType, body, path string
@@ -115,6 +134,9 @@ func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 		{name: "invalid input text", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid instructions", contentType: "application/json", body: `{"instructions":[],"input":"hello"}`, path: ".instructions", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid assistant output text", contentType: "application/json", body: `{"input":[{"role":"assistant","content":[{"type":"output_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "unknown multimodal part", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"future_type","text":"bypass"}]}]}`, path: ".input[0].content[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "spoofed image text", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"input_image","text":"bypass","image_url":"https://example.test/image.png"}]}]}`, path: ".input[0].content[0]", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "wrong text type for role", contentType: "application/json", body: `{"input":[{"role":"assistant","content":[{"type":"input_text","text":"bypass"}]}]}`, path: ".input[0].content[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "function call missing name", contentType: "application/json", body: `{"input":[{"type":"function_call","call_id":"call_1","arguments":"{}"}]}`, path: ".input[0].name", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid function output", contentType: "application/json", body: `{"input":[{"type":"function_call_output","call_id":"call_1","output":{}}]}`, path: ".input[0].output", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "spoofed tool result type", contentType: "application/json", body: `{"input":[{"type":"message","call_id":"call_1","output":"secret"}]}`, path: ".input[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
@@ -159,16 +181,19 @@ func TestParseResponsesResponseExtractsAssistantOutputText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponsesResponse() error = %v", err)
 	}
-	if len(response.Contents) != 3 {
-		t.Fatalf("response contents = %+v, want three entries", response.Contents)
+	if len(response.Contents) != 4 {
+		t.Fatalf("response contents = %+v, want four entries", response.Contents)
 	}
 	if got := response.Contents[0]; got.JSONPath != ".output[1].content[0].text" || got.Content != "first" {
 		t.Fatalf("first assistant content = %+v", got)
 	}
-	if got := response.Contents[1]; got.JSONPath != ".output[2].arguments" || got.Content != "{}" {
+	if got := response.Contents[1]; got.JSONPath != ".output[1].content[1].refusal" || got.Content != "cannot comply" {
+		t.Fatalf("refusal content = %+v", got)
+	}
+	if got := response.Contents[2]; got.JSONPath != ".output[2].arguments" || got.Content != "{}" {
 		t.Fatalf("tool call content = %+v", got)
 	}
-	if got := response.Contents[2]; got.JSONPath != ".output[3].content[0].text" || got.Content != "second" {
+	if got := response.Contents[3]; got.JSONPath != ".output[3].content[0].text" || got.Content != "second" {
 		t.Fatalf("second assistant content = %+v", got)
 	}
 }
@@ -249,6 +274,8 @@ func TestParseResponsesResponseReturnsTypedErrors(t *testing.T) {
 		{name: "missing output", body: `{"object":"response"}`, path: ".output", want: ErrUnsupportedResponsesPayload, kind: ResponsesUnsupportedPayload},
 		{name: "invalid message content", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":null}]}`, path: ".output[0].content", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid output text", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":null}]}]}`, path: ".output[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "invalid refusal", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":null}]}]}`, path: ".output[0].content[0].refusal", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "unknown output part", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"future_type","text":"bypass"}]}]}`, path: ".output[0].content[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "function call missing arguments", body: `{"object":"response","output":[{"type":"function_call","call_id":"call_1","name":"lookup"}]}`, path: ".output[0].arguments", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "spoofed function call type", body: `{"object":"response","output":[{"type":"message","call_id":"call_1","name":"lookup","arguments":"secret"}]}`, path: ".output[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 	}

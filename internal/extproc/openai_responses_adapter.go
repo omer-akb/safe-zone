@@ -68,10 +68,9 @@ type ResponsesContentMutation struct {
 	Content string
 }
 
-// ResponsesRequest represents the text-only subset introduced in the first
-// Phase 6 slice: top-level string input, instructions, and role=user,
-// role=system, or role=assistant message input, plus function-call arguments
-// and results. Other structured and multimodal fields remain separate.
+// ResponsesRequest represents supported text fields in string and multimodal
+// input, plus function-call arguments and results. Non-text image and file
+// parts remain untouched.
 type ResponsesRequest struct {
 	Contents []ResponsesTextContent
 	body     []byte
@@ -130,10 +129,19 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 						return nil, responsesError(ResponsesUnsupportedContent, path+".call_id", ErrUnsupportedResponsesContent)
 					}
 					output := item.object["output"]
-					if output == nil || output.kind != jsonString {
+					if output == nil {
 						return nil, responsesError(ResponsesUnsupportedContent, path+".output", ErrUnsupportedResponsesContent)
 					}
-					request.addContent("tool_result", path+".output", output)
+					switch output.kind {
+					case jsonString:
+						request.addContent("tool_result", path+".output", output)
+					case jsonArray:
+						if err := request.addInputContentParts("tool_result", path+".output", output); err != nil {
+							return nil, err
+						}
+					default:
+						return nil, responsesError(ResponsesUnsupportedContent, path+".output", ErrUnsupportedResponsesContent)
+					}
 					continue
 				}
 			}
@@ -149,23 +157,8 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 			case jsonString:
 				request.addContent(role.stringValue, path+".content", content)
 			case jsonArray:
-				for contentIndex, part := range content.array {
-					partPath := fmt.Sprintf("%s.content[%d]", path, contentIndex)
-					if part.kind != jsonObject {
-						return nil, responsesError(ResponsesUnsupportedContent, partPath, ErrUnsupportedResponsesContent)
-					}
-					typeNode := part.object["type"]
-					if typeNode == nil || typeNode.kind != jsonString {
-						return nil, responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
-					}
-					if !isScannedResponsesTextPart(role.stringValue, typeNode.stringValue) {
-						continue
-					}
-					text := part.object["text"]
-					if text == nil || text.kind != jsonString {
-						return nil, responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
-					}
-					request.addContent(role.stringValue, partPath+".text", text)
+				if err := request.addInputContentParts(role.stringValue, path+".content", content); err != nil {
+					return nil, err
 				}
 			default:
 				return nil, responsesError(ResponsesUnsupportedContent, path+".content", ErrUnsupportedResponsesContent)
@@ -175,6 +168,62 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 		return nil, responsesError(ResponsesUnsupportedContent, ".input", ErrUnsupportedResponsesContent)
 	}
 	return request, nil
+}
+
+func (r *ResponsesRequest) addInputContentParts(role, path string, content *jsonNode) error {
+	if len(content.array) == 0 {
+		return responsesError(ResponsesUnsupportedContent, path, ErrUnsupportedResponsesContent)
+	}
+	for contentIndex, part := range content.array {
+		partPath := fmt.Sprintf("%s[%d]", path, contentIndex)
+		if part.kind != jsonObject {
+			return responsesError(ResponsesUnsupportedContent, partPath, ErrUnsupportedResponsesContent)
+		}
+		partType := part.object["type"]
+		if partType == nil || partType.kind != jsonString {
+			return responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
+		}
+		switch partType.stringValue {
+		case "input_text":
+			if role == "assistant" {
+				return responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
+			}
+			text := part.object["text"]
+			if text == nil || text.kind != jsonString {
+				return responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
+			}
+			r.addContent(role, partPath+".text", text)
+		case "output_text":
+			if role != "assistant" {
+				return responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
+			}
+			text := part.object["text"]
+			if text == nil || text.kind != jsonString {
+				return responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
+			}
+			r.addContent(role, partPath+".text", text)
+		case "refusal":
+			if role != "assistant" {
+				return responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
+			}
+			refusal := part.object["refusal"]
+			if refusal == nil || refusal.kind != jsonString {
+				return responsesError(ResponsesUnsupportedContent, partPath+".refusal", ErrUnsupportedResponsesContent)
+			}
+			r.addContent(role, partPath+".refusal", refusal)
+		case "input_image", "input_file":
+			if role == "assistant" || part.object["text"] != nil || part.object["refusal"] != nil {
+				return responsesError(ResponsesUnsupportedContent, partPath, ErrUnsupportedResponsesContent)
+			}
+		case "input_audio":
+			if role == "assistant" || role == "tool_result" || part.object["text"] != nil || part.object["refusal"] != nil {
+				return responsesError(ResponsesUnsupportedContent, partPath, ErrUnsupportedResponsesContent)
+			}
+		default:
+			return responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
+		}
+	}
+	return nil
 }
 
 func looksLikeResponsesToolPayload(item *jsonNode) bool {
@@ -198,13 +247,6 @@ func (r *ResponsesRequest) addFunctionCall(path string, item *jsonNode) error {
 
 func isScannedResponsesRequestRole(role string) bool {
 	return role == "system" || role == "user" || role == "assistant"
-}
-
-func isScannedResponsesTextPart(role, partType string) bool {
-	if role == "assistant" {
-		return partType == "output_text"
-	}
-	return partType == "input_text"
 }
 
 func (r *ResponsesRequest) addContent(role, path string, node *jsonNode) {
@@ -295,16 +337,24 @@ func ParseResponsesResponse(contentType string, body []byte) (*ResponsesResponse
 			if partType == nil || partType.kind != jsonString {
 				return nil, responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
 			}
-			if partType.stringValue != "output_text" {
-				continue
+			var field string
+			aggregateOutput := false
+			switch partType.stringValue {
+			case "output_text":
+				field = "text"
+				aggregateOutput = true
+			case "refusal":
+				field = "refusal"
+			default:
+				return nil, responsesError(ResponsesUnsupportedContent, partPath+".type", ErrUnsupportedResponsesContent)
 			}
-			text := part.object["text"]
-			if text == nil || text.kind != jsonString {
-				return nil, responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
+			value := part.object[field]
+			if value == nil || value.kind != jsonString {
+				return nil, responsesError(ResponsesUnsupportedContent, partPath+"."+field, ErrUnsupportedResponsesContent)
 			}
 			response.Contents = append(response.Contents, ResponsesTextContent{
-				ID: len(response.Contents), Role: "assistant", JSONPath: partPath + ".text", Content: text.stringValue,
-				start: text.start, end: text.end, aggregateOutput: true,
+				ID: len(response.Contents), Role: "assistant", JSONPath: partPath + "." + field, Content: value.stringValue,
+				start: value.start, end: value.end, aggregateOutput: aggregateOutput,
 			})
 		}
 	}

@@ -49,6 +49,32 @@ func TestOpenAIRequestProcessorMasksSystemUserAndAssistantContentAndUpdatesLengt
 	}
 }
 
+func TestOpenAIRequestProcessorMasksMultimodalTextAndPreservesBinaryParts(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if strings.Contains(input.Text, "secret") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{ "messages" : [ { "role" : "user", "content" : [ { "type" : "text", "text" : "secret one" }, { "type" : "image_url", "image_url" : { "url" : "data:image/png;base64,AAAA" } }, { "type" : "text", "text" : "secret two" } ] } ] }`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json", Body: body,
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionMask || result.DetectionCount != 2 || strings.Count(string(result.Body), `"[MASKED]"`) != 2 || !strings.Contains(string(result.Body), `"url" : "data:image/png;base64,AAAA"`) {
+		t.Fatalf("multimodal result = %+v body=%s", result, result.Body)
+	}
+	if result.HeaderMutations["content-length"] != strconv.Itoa(len(result.Body)) {
+		t.Fatalf("content-length = %q, want %d", result.HeaderMutations["content-length"], len(result.Body))
+	}
+}
+
 func TestOpenAIRequestProcessorMasksStreamingWindow(t *testing.T) {
 	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
 		if input.Text == "secret@example.test" {

@@ -96,6 +96,26 @@ func TestChatResponseMutatePreservesUnknownFieldsFormattingAndChoiceOrder(t *tes
 	}
 }
 
+func TestChatResponseExtractsAndMutatesTextParts(t *testing.T) {
+	body := []byte(`{ "choices" : [ { "message" : { "role" : "assistant", "content" : [ { "type" : "text", "text" : "replace text", "annotations" : [] }, { "type" : "refusal", "refusal" : "replace refusal" } ] }, "extra" : true } ] }`)
+	response, err := ParseChatResponse("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	if len(response.AssistantContents) != 2 || response.AssistantContents[0].JSONPath != ".choices[0].message.content[0].text" || response.AssistantContents[1].JSONPath != ".choices[0].message.content[1].refusal" {
+		t.Fatalf("assistant contents = %+v", response.AssistantContents)
+	}
+	mutated, err := response.Mutate([]ChatResponseContentMutation{{ID: 0, Content: "[MASKED]"}, {ID: 1, Content: "safe refusal"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"replace text"`, `"[MASKED]"`, 1)
+	want = strings.Replace(want, `"replace refusal"`, `"safe refusal"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated response changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
 func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 	response, err := ParseChatResponse("application/json", []byte(`{"choices":[{"message":{"role":"assistant","content":"one"}}]}`))
 	if err != nil {
@@ -208,11 +228,12 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 		{name: "empty body", ctype: "application/json", body: " \n\t", want: ErrEmptyChatRequestBody, kind: ChatRequestEmptyBody},
 		{name: "invalid JSON", ctype: "application/json", body: `{"messages":[`, want: ErrInvalidChatRequestJSON, kind: ChatRequestInvalidJSON},
 		{name: "Responses API shape", ctype: "application/json", body: `{"input":"not chat completions"}`, want: ErrUnsupportedChatRequest, kind: ChatRequestUnsupportedRequest},
-		{name: "user multimodal array", ctype: "application/json", body: `{"messages":[{"role":"user","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user object content", ctype: "application/json", body: `{"messages":[{"role":"user","content":{"text":"no"}}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 		{name: "user missing content", ctype: "application/json", body: `{"messages":[{"role":"user"}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
-		{name: "system multimodal array", ctype: "application/json", body: `{"messages":[{"role":"system","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
-		{name: "assistant multimodal array", ctype: "application/json", body: `{"messages":[{"role":"assistant","content":[{"type":"text","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "empty content array", ctype: "application/json", body: `{"messages":[{"role":"user","content":[]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "unknown content part", ctype: "application/json", body: `{"messages":[{"role":"user","content":[{"type":"unknown","text":"no"}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "image on system role", ctype: "application/json", body: `{"messages":[{"role":"system","content":[{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
+		{name: "spoofed image text", ctype: "application/json", body: `{"messages":[{"role":"user","content":[{"type":"image_url","text":"bypass","image_url":{"url":"https://example.test/image.png"}}]}]}`, want: ErrUnsupportedChatContent, kind: ChatRequestUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,6 +246,41 @@ func TestParseChatRequestReturnsTypedErrors(t *testing.T) {
 				t.Fatalf("ParseChatRequest() typed error = %+v, want kind %q", typed, test.kind)
 			}
 		})
+	}
+}
+
+func TestChatRequestExtractsAndMutatesMultimodalTextParts(t *testing.T) {
+	body := []byte(`{ "messages" : [ { "role" : "system", "content" : [ { "type" : "text", "text" : "system secret" } ] }, { "role" : "user", "content" : [ { "type" : "text", "text" : "first secret" }, { "type" : "image_url", "image_url" : { "url" : "data:image/png;base64,AAAA", "detail" : "low" } }, { "type" : "text", "text" : "second secret", "extra" : true } ] }, { "role" : "assistant", "content" : [ { "type" : "refusal", "refusal" : "assistant secret" } ] }, { "role" : "tool", "tool_call_id" : "call_1", "content" : [ { "type" : "text", "text" : "tool secret" } ] } ] }`)
+	request, err := ParseChatRequest("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatRequest() error = %v", err)
+	}
+	wantPaths := []string{
+		".messages[0].content[0].text",
+		".messages[1].content[0].text",
+		".messages[1].content[2].text",
+		".messages[2].content[0].refusal",
+		".messages[3].content[0].text",
+	}
+	if len(request.Contents) != len(wantPaths) {
+		t.Fatalf("request contents = %+v", request.Contents)
+	}
+	mutations := make([]ChatContentMutation, len(wantPaths))
+	for index, path := range wantPaths {
+		if request.Contents[index].JSONPath != path {
+			t.Fatalf("content[%d] = %+v, want path %s", index, request.Contents[index], path)
+		}
+		mutations[index] = ChatContentMutation{ID: request.Contents[index].ID, Content: "[MASKED]"}
+	}
+	mutated, err := request.Mutate(mutations)
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	if strings.Count(string(mutated), `"[MASKED]"`) != len(wantPaths) {
+		t.Fatalf("mutated request = %s", mutated)
+	}
+	if !strings.Contains(string(mutated), `"url" : "data:image/png;base64,AAAA", "detail" : "low"`) {
+		t.Fatalf("non-text image part changed: %s", mutated)
 	}
 }
 

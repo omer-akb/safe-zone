@@ -704,14 +704,14 @@ The supported non-streaming content fields are:
 
 | API | Request fields | Response fields |
 | --- | --- | --- |
-| Chat Completions | String `messages[].content` for system/user/assistant/tool messages and `messages[].tool_calls[].function.arguments` | String `choices[].message.content` and `choices[].message.tool_calls[].function.arguments` where `role=assistant` |
-| Responses | String `instructions`, string `input`, supported system/user/assistant message text, `function_call.arguments`, and `function_call_output.output` in `input[]` | Assistant `output_text` and `function_call.arguments` in `output[]`; top-level `output_text` is kept consistent when present |
+| Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for system/user/assistant/tool messages, assistant `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant `text`/`refusal` fields in content arrays, and `choices[].message.tool_calls[].function.arguments` |
+| Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
 
 TSZ changes only the extracted text string values and the derived Responses
 API `output_text` value; item order, unknown fields and untouched JSON bytes
 are preserved. Tool names and execution authorization are not changed. Tool
-payloads in streaming events, multimodal non-text data, and Responses API
-streaming events are not covered by this capability yet.
+payloads in streaming events, the bytes or meaning of multimodal image/audio/file
+data, and Responses API streaming events are not covered by this capability yet.
 
 | Policy action | Envoy result |
 | --- | --- |
