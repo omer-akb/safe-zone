@@ -54,12 +54,13 @@ func responsesError(kind ResponsesErrorKind, path string, err error) *ResponsesE
 // ResponsesTextContent identifies one supported mutable JSON string. The
 // stable integer ID is used instead of trusting caller-supplied JSON paths.
 type ResponsesTextContent struct {
-	ID       int
-	Role     string
-	JSONPath string
-	Content  string
-	start    int
-	end      int
+	ID              int
+	Role            string
+	JSONPath        string
+	Content         string
+	start           int
+	end             int
+	aggregateOutput bool
 }
 
 type ResponsesContentMutation struct {
@@ -69,15 +70,15 @@ type ResponsesContentMutation struct {
 
 // ResponsesRequest represents the text-only subset introduced in the first
 // Phase 6 slice: top-level string input, instructions, and role=user,
-// role=system, or role=assistant message input. Tool payloads and multimodal
-// fields are intentionally left for their separately tracked capabilities.
+// role=system, or role=assistant message input, plus function-call arguments
+// and results. Other structured and multimodal fields remain separate.
 type ResponsesRequest struct {
 	Contents []ResponsesTextContent
 	body     []byte
 }
 
-// ParseResponsesRequest extracts supported system and user text while retaining
-// source offsets so mutations leave all unrelated and unknown JSON
+// ParseResponsesRequest extracts supported message and tool text while
+// retaining source offsets so mutations leave all unrelated and unknown JSON
 // byte-for-byte unchanged.
 func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, error) {
 	root, err := parseResponsesDocument(contentType, body)
@@ -111,6 +112,30 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 			path := fmt.Sprintf(".input[%d]", itemIndex)
 			if item.kind != jsonObject {
 				return nil, responsesError(ResponsesUnsupportedContent, path, ErrUnsupportedResponsesContent)
+			}
+			typeNode := item.object["type"]
+			if looksLikeResponsesToolPayload(item) && (typeNode == nil || typeNode.kind != jsonString || (typeNode.stringValue != "function_call" && typeNode.stringValue != "function_call_output")) {
+				return nil, responsesError(ResponsesUnsupportedContent, path+".type", ErrUnsupportedResponsesContent)
+			}
+			if typeNode != nil && typeNode.kind == jsonString {
+				switch typeNode.stringValue {
+				case "function_call":
+					if err := request.addFunctionCall(path, item); err != nil {
+						return nil, err
+					}
+					continue
+				case "function_call_output":
+					callID := item.object["call_id"]
+					if callID == nil || callID.kind != jsonString {
+						return nil, responsesError(ResponsesUnsupportedContent, path+".call_id", ErrUnsupportedResponsesContent)
+					}
+					output := item.object["output"]
+					if output == nil || output.kind != jsonString {
+						return nil, responsesError(ResponsesUnsupportedContent, path+".output", ErrUnsupportedResponsesContent)
+					}
+					request.addContent("tool_result", path+".output", output)
+					continue
+				}
 			}
 			role := item.object["role"]
 			if role == nil || role.kind != jsonString || !isScannedResponsesRequestRole(role.stringValue) {
@@ -152,6 +177,25 @@ func ParseResponsesRequest(contentType string, body []byte) (*ResponsesRequest, 
 	return request, nil
 }
 
+func looksLikeResponsesToolPayload(item *jsonNode) bool {
+	return item != nil && item.kind == jsonObject && (item.object["call_id"] != nil || item.object["arguments"] != nil || item.object["output"] != nil)
+}
+
+func (r *ResponsesRequest) addFunctionCall(path string, item *jsonNode) error {
+	callID, name, arguments := item.object["call_id"], item.object["name"], item.object["arguments"]
+	if callID == nil || callID.kind != jsonString {
+		return responsesError(ResponsesUnsupportedContent, path+".call_id", ErrUnsupportedResponsesContent)
+	}
+	if name == nil || name.kind != jsonString {
+		return responsesError(ResponsesUnsupportedContent, path+".name", ErrUnsupportedResponsesContent)
+	}
+	if arguments == nil || arguments.kind != jsonString {
+		return responsesError(ResponsesUnsupportedContent, path+".arguments", ErrUnsupportedResponsesContent)
+	}
+	r.addContent("tool_call", path+".arguments", arguments)
+	return nil
+}
+
 func isScannedResponsesRequestRole(role string) bool {
 	return role == "system" || role == "user" || role == "assistant"
 }
@@ -176,13 +220,13 @@ func (r *ResponsesRequest) Mutate(mutations []ResponsesContentMutation) ([]byte,
 	return mutateResponsesContents(r.body, r.Contents, mutations, nil)
 }
 
-// ResponsesResponse represents assistant output_text blocks in a buffered
-// Responses API response. Tool outputs, refusals and streaming events are not
-// treated as assistant text by this first implementation slice.
+// ResponsesResponse represents assistant output_text blocks and function-call
+// arguments in a buffered Responses API response. Tool outputs arrive in a
+// subsequent request; refusals and streaming events are not inspected here.
 type ResponsesResponse struct {
-	AssistantContents []ResponsesTextContent
-	body              []byte
-	outputText        *jsonNode
+	Contents   []ResponsesTextContent
+	body       []byte
+	outputText *jsonNode
 }
 
 func ParseResponsesResponse(contentType string, body []byte) (*ResponsesResponse, error) {
@@ -212,7 +256,26 @@ func ParseResponsesResponse(contentType string, body []byte) (*ResponsesResponse
 			return nil, responsesError(ResponsesUnsupportedContent, itemPath, ErrUnsupportedResponsesContent)
 		}
 		typeNode := item.object["type"]
+		if looksLikeResponsesToolPayload(item) && (typeNode == nil || typeNode.kind != jsonString || typeNode.stringValue != "function_call") {
+			return nil, responsesError(ResponsesUnsupportedContent, itemPath+".type", ErrUnsupportedResponsesContent)
+		}
 		if typeNode == nil || typeNode.kind != jsonString || typeNode.stringValue != "message" {
+			if typeNode != nil && typeNode.kind == jsonString && typeNode.stringValue == "function_call" {
+				callID, name, arguments := item.object["call_id"], item.object["name"], item.object["arguments"]
+				if callID == nil || callID.kind != jsonString {
+					return nil, responsesError(ResponsesUnsupportedContent, itemPath+".call_id", ErrUnsupportedResponsesContent)
+				}
+				if name == nil || name.kind != jsonString {
+					return nil, responsesError(ResponsesUnsupportedContent, itemPath+".name", ErrUnsupportedResponsesContent)
+				}
+				if arguments == nil || arguments.kind != jsonString {
+					return nil, responsesError(ResponsesUnsupportedContent, itemPath+".arguments", ErrUnsupportedResponsesContent)
+				}
+				response.Contents = append(response.Contents, ResponsesTextContent{
+					ID: len(response.Contents), Role: "tool_call", JSONPath: itemPath + ".arguments",
+					Content: arguments.stringValue, start: arguments.start, end: arguments.end,
+				})
+			}
 			continue
 		}
 		role := item.object["role"]
@@ -239,21 +302,31 @@ func ParseResponsesResponse(contentType string, body []byte) (*ResponsesResponse
 			if text == nil || text.kind != jsonString {
 				return nil, responsesError(ResponsesUnsupportedContent, partPath+".text", ErrUnsupportedResponsesContent)
 			}
-			response.AssistantContents = append(response.AssistantContents, ResponsesTextContent{
-				ID: len(response.AssistantContents), JSONPath: partPath + ".text", Content: text.stringValue, start: text.start, end: text.end,
+			response.Contents = append(response.Contents, ResponsesTextContent{
+				ID: len(response.Contents), Role: "assistant", JSONPath: partPath + ".text", Content: text.stringValue,
+				start: text.start, end: text.end, aggregateOutput: true,
 			})
 		}
 	}
 	// output_text is normally a convenience aggregation of message output. If a
 	// compatible proxy returns it without the underlying message blocks, inspect
 	// it directly so visible assistant text never bypasses the guardrail.
-	if response.outputText != nil && len(response.AssistantContents) == 0 {
-		response.AssistantContents = append(response.AssistantContents, ResponsesTextContent{
-			ID: 0, JSONPath: ".output_text", Content: response.outputText.stringValue,
+	if response.outputText != nil && !response.hasAggregateOutput() {
+		response.Contents = append(response.Contents, ResponsesTextContent{
+			ID: len(response.Contents), Role: "assistant", JSONPath: ".output_text", Content: response.outputText.stringValue,
 			start: response.outputText.start, end: response.outputText.end,
 		})
 	}
 	return response, nil
+}
+
+func (r *ResponsesResponse) hasAggregateOutput() bool {
+	for _, content := range r.Contents {
+		if content.aggregateOutput {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ResponsesResponse) Mutate(mutations []ResponsesContentMutation) ([]byte, error) {
@@ -261,21 +334,33 @@ func (r *ResponsesResponse) Mutate(mutations []ResponsesContentMutation) ([]byte
 		return nil, responsesError(ResponsesInvalidMutation, "", ErrInvalidResponsesMutation)
 	}
 	var derivedOutputText *string
-	if r.outputText != nil && len(r.AssistantContents) > 0 && r.AssistantContents[0].JSONPath != ".output_text" && len(mutations) > 0 {
-		values := make(map[int]string, len(r.AssistantContents))
-		for _, content := range r.AssistantContents {
-			values[content.ID] = content.Content
+	if r.outputText != nil && r.hasAggregateOutput() && len(mutations) > 0 {
+		values := make(map[int]string, len(r.Contents))
+		mutatesOutput := false
+		for _, content := range r.Contents {
+			if content.aggregateOutput {
+				values[content.ID] = content.Content
+			}
 		}
 		for _, mutation := range mutations {
-			values[mutation.ID] = mutation.Content
+			for _, content := range r.Contents {
+				if content.ID == mutation.ID && content.aggregateOutput {
+					values[mutation.ID] = mutation.Content
+					mutatesOutput = true
+				}
+			}
 		}
-		var combined string
-		for _, content := range r.AssistantContents {
-			combined += values[content.ID]
+		if mutatesOutput {
+			var combined string
+			for _, content := range r.Contents {
+				if content.aggregateOutput {
+					combined += values[content.ID]
+				}
+			}
+			derivedOutputText = &combined
 		}
-		derivedOutputText = &combined
 	}
-	return mutateResponsesContents(r.body, r.AssistantContents, mutations, func(targets *[]sourceReplacement) error {
+	return mutateResponsesContents(r.body, r.Contents, mutations, func(targets *[]sourceReplacement) error {
 		if derivedOutputText == nil {
 			return nil
 		}

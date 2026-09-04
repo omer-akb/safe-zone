@@ -76,8 +76,8 @@ func TestChatResponseMutatePreservesUnknownFieldsFormattingAndChoiceOrder(t *tes
 		t.Fatalf("ParseChatResponse() error = %v", err)
 	}
 	mutated, err := response.Mutate([]ChatResponseContentMutation{
-		{ChoiceIndex: 0, Content: "[MASKED]"},
-		{ChoiceIndex: 1, Content: ""},
+		{ID: 0, Content: "[MASKED]"},
+		{ID: 1, Content: ""},
 	})
 	if err != nil {
 		t.Fatalf("Mutate() error = %v", err)
@@ -102,8 +102,8 @@ func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 		t.Fatalf("ParseChatResponse() error = %v", err)
 	}
 	for _, mutations := range [][]ChatResponseContentMutation{
-		{{ChoiceIndex: 2, Content: "unknown"}},
-		{{ChoiceIndex: 0, Content: "first"}, {ChoiceIndex: 0, Content: "second"}},
+		{{ID: 2, Content: "unknown"}},
+		{{ID: 0, Content: "first"}, {ID: 0, Content: "second"}},
 	} {
 		_, err := response.Mutate(mutations)
 		if !errors.Is(err, ErrInvalidChatResponseMutation) {
@@ -112,14 +112,33 @@ func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 	}
 }
 
-func TestParseChatRequestExtractsSystemUserAndAssistantStringContent(t *testing.T) {
+func TestChatResponseExtractsAndMutatesToolCallArguments(t *testing.T) {
+	body := []byte(`{ "choices" : [ { "message" : { "role" : "assistant", "content" : null, "tool_calls" : [ { "id" : "call_1", "type" : "function", "function" : { "name" : "lookup", "arguments" : "{\"email\":\"secret@example.com\"}" } } ] } } ] }`)
+	response, err := ParseChatResponse("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	if len(response.AssistantContents) != 1 || response.AssistantContents[0].JSONPath != ".choices[0].message.tool_calls[0].function.arguments" {
+		t.Fatalf("response contents = %+v", response.AssistantContents)
+	}
+	mutated, err := response.Mutate([]ChatResponseContentMutation{{ID: response.AssistantContents[0].ID, Content: `{"email":"[MASKED]"}`}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"{\"email\":\"secret@example.com\"}"`, `"{\"email\":\"[MASKED]\"}"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated tool call changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
+func TestParseChatRequestExtractsMessageAndToolResultContent(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "messages": [
     {"role":"system","content":"system instructions"},
     {"role":"developer","content":"developer instructions"},
     {"role":"assistant","content":"assistant reply"},
-    {"role":"tool","content":"tool output"},
+    {"role":"tool","tool_call_id":"call_0","content":"tool output"},
     {"role":"user","content":"first user message"},
     {"role":"user","content":"second user message"}
   ],
@@ -129,15 +148,18 @@ func TestParseChatRequestExtractsSystemUserAndAssistantStringContent(t *testing.
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.Contents) != 4 {
-		t.Fatalf("request contents = %+v, want four entries", request.Contents)
+	if len(request.Contents) != 5 {
+		t.Fatalf("request contents = %+v, want five entries", request.Contents)
 	}
-	system, assistant, first, second := request.Contents[0], request.Contents[1], request.Contents[2], request.Contents[3]
+	system, assistant, toolResult, first, second := request.Contents[0], request.Contents[1], request.Contents[2], request.Contents[3], request.Contents[4]
 	if system.MessageIndex != 0 || system.Role != "system" || system.JSONPath != ".messages[0].content" || system.Content != "system instructions" {
 		t.Fatalf("system content = %+v", system)
 	}
 	if assistant.MessageIndex != 2 || assistant.Role != "assistant" || assistant.JSONPath != ".messages[2].content" || assistant.Content != "assistant reply" {
 		t.Fatalf("assistant content = %+v", assistant)
+	}
+	if toolResult.MessageIndex != 3 || toolResult.Role != "tool" || toolResult.JSONPath != ".messages[3].content" || toolResult.Content != "tool output" {
+		t.Fatalf("tool result content = %+v", toolResult)
 	}
 	if first.MessageIndex != 4 || first.Role != "user" || first.JSONPath != ".messages[4].content" || first.Content != "first user message" {
 		t.Fatalf("first user content = %+v", first)
@@ -156,7 +178,7 @@ func TestChatRequestMutatePreservesUnknownFieldsFormattingAndMessageOrder(t *tes
 	if len(request.Contents) != 3 || request.Contents[0].MessageIndex != 0 || request.Contents[1].MessageIndex != 1 || request.Contents[2].MessageIndex != 2 {
 		t.Fatalf("request contents = %+v", request.Contents)
 	}
-	mutated, err := request.Mutate([]ChatContentMutation{{MessageIndex: 0, Content: "safe system"}, {MessageIndex: 1, Content: "masked\ncontent"}})
+	mutated, err := request.Mutate([]ChatContentMutation{{ID: 0, Content: "safe system"}, {ID: 1, Content: "masked\ncontent"}})
 	if err != nil {
 		t.Fatalf("Mutate() error = %v", err)
 	}
@@ -222,12 +244,47 @@ func TestChatRequestMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
 	for _, mutations := range [][]ChatContentMutation{
-		{{MessageIndex: 2, Content: "unknown"}},
-		{{MessageIndex: 0, Content: "first"}, {MessageIndex: 0, Content: "second"}},
+		{{ID: 2, Content: "unknown"}},
+		{{ID: 0, Content: "first"}, {ID: 0, Content: "second"}},
 	} {
 		_, err := request.Mutate(mutations)
 		if !errors.Is(err, ErrInvalidChatMutation) {
 			t.Fatalf("Mutate(%+v) error = %v, want ErrInvalidChatMutation", mutations, err)
 		}
+	}
+}
+
+func TestChatRequestExtractsAndMutatesToolCallsAndResults(t *testing.T) {
+	body := []byte(`{ "messages" : [ { "role" : "assistant", "content" : null, "tool_calls" : [ { "id" : "call_1", "type" : "function", "function" : { "name" : "lookup", "arguments" : "{\"email\":\"secret@example.com\"}" } } ] }, { "role" : "tool", "tool_call_id" : "call_1", "content" : "result secret@example.com" } ] }`)
+	request, err := ParseChatRequest("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatRequest() error = %v", err)
+	}
+	if len(request.Contents) != 2 || request.Contents[0].Role != "tool_call" || request.Contents[1].Role != "tool" {
+		t.Fatalf("request contents = %+v", request.Contents)
+	}
+	mutated, err := request.Mutate([]ChatContentMutation{{ID: 0, Content: `{"email":"[MASKED]"}`}, {ID: 1, Content: "result [MASKED]"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"{\"email\":\"secret@example.com\"}"`, `"{\"email\":\"[MASKED]\"}"`, 1)
+	want = strings.Replace(want, `"result secret@example.com"`, `"result [MASKED]"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated tool payload changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
+func TestChatToolPayloadsReturnTypedErrors(t *testing.T) {
+	_, requestErr := ParseChatRequest("application/json", []byte(`{"messages":[{"role":"assistant","content":null,"tool_calls":[{"function":{"name":"lookup","arguments":{}}}]}]}`))
+	if !errors.Is(requestErr, ErrUnsupportedChatContent) {
+		t.Fatalf("request error = %v, want unsupported content", requestErr)
+	}
+	_, responseErr := ParseChatResponse("application/json", []byte(`{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"arguments":"{}"}}]}}]}`))
+	if !errors.Is(responseErr, ErrUnsupportedChatResponseContent) {
+		t.Fatalf("response error = %v, want unsupported response content", responseErr)
+	}
+	_, roleErr := ParseChatRequest("application/json", []byte(`{"messages":[{"role":"user","content":"safe","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"secret"}}]}]}`))
+	if !errors.Is(roleErr, ErrUnsupportedChatContent) {
+		t.Fatalf("role spoof error = %v, want unsupported content", roleErr)
 	}
 }

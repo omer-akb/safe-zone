@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParseResponsesRequestExtractsSupportedSystemUserAndAssistantText(t *testing.T) {
+func TestParseResponsesRequestExtractsMessagesAndToolResults(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "instructions": "top-level system instructions",
@@ -26,8 +26,8 @@ func TestParseResponsesRequestExtractsSupportedSystemUserAndAssistantText(t *tes
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.Contents) != 5 {
-		t.Fatalf("request contents = %+v, want five entries", request.Contents)
+	if len(request.Contents) != 6 {
+		t.Fatalf("request contents = %+v, want six entries", request.Contents)
 	}
 	if got := request.Contents[0]; got.ID != 0 || got.Role != "system" || got.JSONPath != ".instructions" || got.Content != "top-level system instructions" {
 		t.Fatalf("instructions content = %+v", got)
@@ -43,6 +43,9 @@ func TestParseResponsesRequestExtractsSupportedSystemUserAndAssistantText(t *tes
 	}
 	if got := request.Contents[4]; got.ID != 4 || got.Role != "assistant" || got.JSONPath != ".input[3].content[0].text" || got.Content != "previous assistant text" {
 		t.Fatalf("assistant content = %+v", got)
+	}
+	if got := request.Contents[5]; got.ID != 5 || got.Role != "tool_result" || got.JSONPath != ".input[4].output" || got.Content != "tool output" {
+		t.Fatalf("tool result content = %+v", got)
 	}
 }
 
@@ -77,6 +80,26 @@ func TestResponsesRequestMutatePreservesUnknownFieldsAndFormatting(t *testing.T)
 	}
 }
 
+func TestResponsesRequestMutatesFunctionCallsAndOutputs(t *testing.T) {
+	body := []byte(`{ "input" : [ { "type" : "function_call", "name" : "lookup", "call_id" : "call_1", "arguments" : "{\"email\":\"secret@example.com\"}" }, { "type" : "function_call_output", "call_id" : "call_1", "output" : "result secret@example.com" } ] }`)
+	request, err := ParseResponsesRequest("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseResponsesRequest() error = %v", err)
+	}
+	if len(request.Contents) != 2 || request.Contents[0].Role != "tool_call" || request.Contents[1].Role != "tool_result" {
+		t.Fatalf("request contents = %+v", request.Contents)
+	}
+	mutated, err := request.Mutate([]ResponsesContentMutation{{ID: 0, Content: `{"email":"[MASKED]"}`}, {ID: 1, Content: "result [MASKED]"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"{\"email\":\"secret@example.com\"}"`, `"{\"email\":\"[MASKED]\"}"`, 1)
+	want = strings.Replace(want, `"result secret@example.com"`, `"result [MASKED]"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated tool payload changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
 func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 	tests := []struct {
 		name, contentType, body, path string
@@ -92,6 +115,9 @@ func TestParseResponsesRequestReturnsTypedErrors(t *testing.T) {
 		{name: "invalid input text", contentType: "application/json", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid instructions", contentType: "application/json", body: `{"instructions":[],"input":"hello"}`, path: ".instructions", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid assistant output text", contentType: "application/json", body: `{"input":[{"role":"assistant","content":[{"type":"output_text","text":null}]}]}`, path: ".input[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "function call missing name", contentType: "application/json", body: `{"input":[{"type":"function_call","call_id":"call_1","arguments":"{}"}]}`, path: ".input[0].name", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "invalid function output", contentType: "application/json", body: `{"input":[{"type":"function_call_output","call_id":"call_1","output":{}}]}`, path: ".input[0].output", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "spoofed tool result type", contentType: "application/json", body: `{"input":[{"type":"message","call_id":"call_1","output":"secret"}]}`, path: ".input[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -128,19 +154,41 @@ func TestParseResponsesRequestAcceptsInstructionsWithoutInput(t *testing.T) {
 }
 
 func TestParseResponsesResponseExtractsAssistantOutputText(t *testing.T) {
-	body := []byte(`{"id":"resp_1","object":"response","output":[{"type":"reasoning","summary":[]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"first","annotations":[]},{"type":"refusal","refusal":"cannot comply"}]},{"id":"call_1","type":"function_call","arguments":"{}"},{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"output_text","text":"second","annotations":[]}]}],"output_text":"firstsecond","usage":{"total_tokens":5}}`)
+	body := []byte(`{"id":"resp_1","object":"response","output":[{"type":"reasoning","summary":[]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"first","annotations":[]},{"type":"refusal","refusal":"cannot comply"}]},{"id":"call_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"output_text","text":"second","annotations":[]}]}],"output_text":"firstsecond","usage":{"total_tokens":5}}`)
 	response, err := ParseResponsesResponse("application/json", body)
 	if err != nil {
 		t.Fatalf("ParseResponsesResponse() error = %v", err)
 	}
-	if len(response.AssistantContents) != 2 {
-		t.Fatalf("assistant contents = %+v, want two entries", response.AssistantContents)
+	if len(response.Contents) != 3 {
+		t.Fatalf("response contents = %+v, want three entries", response.Contents)
 	}
-	if got := response.AssistantContents[0]; got.JSONPath != ".output[1].content[0].text" || got.Content != "first" {
+	if got := response.Contents[0]; got.JSONPath != ".output[1].content[0].text" || got.Content != "first" {
 		t.Fatalf("first assistant content = %+v", got)
 	}
-	if got := response.AssistantContents[1]; got.JSONPath != ".output[3].content[0].text" || got.Content != "second" {
+	if got := response.Contents[1]; got.JSONPath != ".output[2].arguments" || got.Content != "{}" {
+		t.Fatalf("tool call content = %+v", got)
+	}
+	if got := response.Contents[2]; got.JSONPath != ".output[3].content[0].text" || got.Content != "second" {
 		t.Fatalf("second assistant content = %+v", got)
+	}
+}
+
+func TestResponsesResponseMutatesFunctionCallWithoutChangingOutputText(t *testing.T) {
+	body := []byte(`{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"visible"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"email\":\"secret@example.com\"}"}],"output_text":"visible"}`)
+	response, err := ParseResponsesResponse("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseResponsesResponse() error = %v", err)
+	}
+	if len(response.Contents) != 2 || response.Contents[1].Role != "tool_call" {
+		t.Fatalf("response contents = %+v", response.Contents)
+	}
+	mutated, err := response.Mutate([]ResponsesContentMutation{{ID: response.Contents[1].ID, Content: `{"email":"[MASKED]"}`}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"{\"email\":\"secret@example.com\"}"`, `"{\"email\":\"[MASKED]\"}"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated function call changed output text\ngot:  %s\nwant: %s", mutated, want)
 	}
 }
 
@@ -166,8 +214,8 @@ func TestResponsesResponseUsesConvenienceOutputTextAsSafeFallback(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ParseResponsesResponse() error = %v", err)
 	}
-	if len(response.AssistantContents) != 1 || response.AssistantContents[0].JSONPath != ".output_text" {
-		t.Fatalf("assistant contents = %+v", response.AssistantContents)
+	if len(response.Contents) != 1 || response.Contents[0].JSONPath != ".output_text" {
+		t.Fatalf("response contents = %+v", response.Contents)
 	}
 	mutated, err := response.Mutate([]ResponsesContentMutation{{ID: 0, Content: "[MASKED]"}})
 	if err != nil || string(mutated) != `{"object":"response","output":[],"output_text":"[MASKED]"}` {
@@ -201,6 +249,8 @@ func TestParseResponsesResponseReturnsTypedErrors(t *testing.T) {
 		{name: "missing output", body: `{"object":"response"}`, path: ".output", want: ErrUnsupportedResponsesPayload, kind: ResponsesUnsupportedPayload},
 		{name: "invalid message content", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":null}]}`, path: ".output[0].content", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 		{name: "invalid output text", body: `{"object":"response","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":null}]}]}`, path: ".output[0].content[0].text", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "function call missing arguments", body: `{"object":"response","output":[{"type":"function_call","call_id":"call_1","name":"lookup"}]}`, path: ".output[0].arguments", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
+		{name: "spoofed function call type", body: `{"object":"response","output":[{"type":"message","call_id":"call_1","name":"lookup","arguments":"secret"}]}`, path: ".output[0].type", want: ErrUnsupportedResponsesContent, kind: ResponsesUnsupportedContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

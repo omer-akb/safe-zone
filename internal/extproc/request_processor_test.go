@@ -256,6 +256,52 @@ func TestOpenAIRequestProcessorMutatesEveryMatchingRequestMessage(t *testing.T) 
 	}
 }
 
+func TestOpenAIRequestProcessorMasksChatToolCallAndResult(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if strings.Contains(input.Text, "secret@example.com") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: strings.ReplaceAll(input.Text, "secret@example.com", "[MASKED]"), DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	body := []byte(`{"messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"email\":\"secret@example.com\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result secret@example.com"}]}`)
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json", Body: body,
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionMask || result.DetectionCount != 2 || strings.Contains(string(result.Body), "secret@example.com") {
+		t.Fatalf("tool request result = %+v body=%s", result, result.Body)
+	}
+}
+
+func TestOpenAIRequestProcessorBlocksChatToolCallResponse(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if strings.Contains(input.Text, "secret") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionBlock, DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	result, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageResponse, ContentType: "application/json",
+		Body:           []byte(`{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"token\":\"secret\"}"}}]}}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Action != ActionBlock || result.ImmediateStatus != 403 || result.Body != nil {
+		t.Fatalf("tool response result = %+v", result)
+	}
+}
+
 func TestOpenAIRequestProcessorMasksAssistantResponseAndUpdatesLength(t *testing.T) {
 	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
 		if input.Text == "secret assistant value" {
@@ -378,6 +424,44 @@ func TestOpenAIRequestProcessorUsesStrongestActionAcrossResponsesAPIInputItems(t
 	}
 	if result.Action != ActionBlock || result.DetectionCount != 2 || result.Body != nil || result.HeaderMutations != nil {
 		t.Fatalf("strongest Responses API request result = %+v", result)
+	}
+}
+
+func TestOpenAIRequestProcessorScansResponsesFunctionCallAndOutput(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		switch {
+		case strings.Contains(input.Text, "mask@example.com"):
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: strings.ReplaceAll(input.Text, "mask@example.com", "[MASKED]"), DetectionCount: 1, Categories: []string{"PII"}}, nil
+		case strings.Contains(input.Text, "blocked-secret"):
+			return guardrails.InspectResult{Action: guardrails.RuleActionBlock, DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+		default:
+			return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+		}
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	requestResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json",
+		Body:           []byte(`{"input":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"email\":\"mask@example.com\"}"},{"type":"function_call_output","call_id":"call_1","output":"safe result"}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("request Process() error = %v", err)
+	}
+	if requestResult.Action != ActionMask || strings.Contains(string(requestResult.Body), "mask@example.com") {
+		t.Fatalf("Responses tool request result = %+v body=%s", requestResult, requestResult.Body)
+	}
+	responseResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageResponse, ContentType: "application/json",
+		Body:           []byte(`{"object":"response","output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"token\":\"blocked-secret\"}"}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("response Process() error = %v", err)
+	}
+	if responseResult.Action != ActionBlock || responseResult.ImmediateStatus != 403 {
+		t.Fatalf("Responses tool response result = %+v", responseResult)
 	}
 }
 

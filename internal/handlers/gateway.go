@@ -23,7 +23,7 @@ import (
 //
 // Flow:
 //  1. Parse the incoming OpenAI-style chat request (model, messages, stream, ...)
-//  2. Run TSZ detection/guardrails on system, user, and assistant messages (input guardrails)
+//  2. Run TSZ detection/guardrails on messages and tool payloads (input guardrails)
 //  3. Optionally block or redact the request
 //  4. Forward the sanitized request to the upstream OpenAI-compatible endpoint
 //  5. For non-streaming calls, optionally apply guardrails on assistant output
@@ -54,7 +54,7 @@ func NewOpenAIChatGateway(service guardrails.GuardrailService) http.HandlerFunc 
 		mode, onFail := extractGatewayStreamOptions(r)
 		log.Printf("[gateway] RID=%s stream=%v mode=%s onFail=%s guardrails=%v gateway_block_mode=%s", rid, stream, mode, onFail, guardrailsList, config.AppConfig.GatewayBlockMode)
 
-		// 3) Apply input guardrails on system, user, and assistant messages
+		// 3) Apply input guardrails on messages and tool payloads
 		sanitizedMessages, blocked, blockMessage, inputDetects := applyInputGuardrails(r.Context(), service, messages, rid, guardrailsList)
 		if blocked {
 			triggeredGuardrails := computeTriggeredGuardrails(inputDetects, nil)
@@ -201,7 +201,8 @@ func extractGatewayStreamOptions(r *http.Request) (mode, onFail string) {
 	return mode, onFail
 }
 
-// applyInputGuardrails runs detection/guardrails on system, user, and assistant messages and returns sanitized messages.
+// applyInputGuardrails scans supported message content, tool-call arguments,
+// and tool results before the request is forwarded upstream.
 func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailService, messages []interface{}, rid string, guardrailsList []string) ([]interface{}, bool, string, []models.DetectResponse) {
 	blocked := false
 	blockMessage := ""
@@ -213,45 +214,68 @@ func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailServi
 			continue
 		}
 
-		role, _ := msgMap["role"].(string)
-		content, _ := msgMap["content"].(string)
-		if content == "" {
-			continue
-		}
-
-		if role != "user" && role != "system" && role != "assistant" {
-			continue
-		}
-
-		resp, err := guardrails.DetectLegacy(ctx, service, models.DetectRequest{
-			Text:       content,
-			RID:        rid,
-			Guardrails: guardrailsList,
-		})
-		if err != nil {
-			blocked = true
-			blockMessage = "Guardrail inspection failed"
-			break
-		}
-
-		detectResponses = append(detectResponses, resp)
-
-		logGatewayDetectSummary("input", rid, resp)
-
-		if resp.Blocked {
-			blocked = true
-			if resp.Message != "" {
-				blockMessage = resp.Message
-			} else {
-				blockMessage = "Request blocked by TSZ security policy"
+		inspect := func(text string, apply func(string)) bool {
+			if text == "" {
+				return true
 			}
-			break
+			resp, err := guardrails.DetectLegacy(ctx, service, models.DetectRequest{Text: text, RID: rid, Guardrails: guardrailsList})
+			if err != nil {
+				blocked, blockMessage = true, "Guardrail inspection failed"
+				return false
+			}
+			detectResponses = append(detectResponses, resp)
+			logGatewayDetectSummary("input", rid, resp)
+			if resp.Blocked {
+				blocked, blockMessage = true, resp.Message
+				if blockMessage == "" {
+					blockMessage = "Request blocked by TSZ security policy"
+				}
+				return false
+			}
+			if resp.RedactedText != "" {
+				apply(resp.RedactedText)
+			}
+			return true
 		}
 
-		if resp.RedactedText != "" {
-			msgMap["content"] = resp.RedactedText
-			messages[i] = msgMap
+		role, _ := msgMap["role"].(string)
+		if role == "tool" {
+			if _, ok := msgMap["tool_call_id"].(string); !ok {
+				blocked, blockMessage = true, "Unsupported tool result payload"
+				break
+			}
 		}
+		if role == "user" || role == "system" || role == "assistant" || role == "tool" {
+			if content, ok := msgMap["content"].(string); ok && !inspect(content, func(value string) { msgMap["content"] = value }) {
+				break
+			}
+		}
+		if role == "assistant" {
+			toolCalls, ok := msgMap["tool_calls"].([]interface{})
+			if _, present := msgMap["tool_calls"]; present && !ok {
+				blocked, blockMessage = true, "Unsupported tool call payload"
+				break
+			}
+			for _, rawCall := range toolCalls {
+				call, callOK := rawCall.(map[string]interface{})
+				function, functionOK := call["function"].(map[string]interface{})
+				_, idOK := call["id"].(string)
+				callType, typeOK := call["type"].(string)
+				_, nameOK := function["name"].(string)
+				arguments, argumentsOK := function["arguments"].(string)
+				if !callOK || !functionOK || !idOK || !typeOK || callType != "function" || !nameOK || !argumentsOK {
+					blocked, blockMessage = true, "Unsupported tool call payload"
+					break
+				}
+				if !inspect(arguments, func(value string) { function["arguments"] = value }) {
+					break
+				}
+			}
+			if blocked {
+				break
+			}
+		}
+		messages[i] = msgMap
 	}
 
 	return messages, blocked, blockMessage, detectResponses
@@ -306,54 +330,61 @@ func processNonStreamResponse(ctx context.Context, service guardrails.GuardrailS
 					continue
 				}
 
-				content, _ := msg["content"].(string)
-				if content == "" {
-					continue
+				type outputTarget struct {
+					text  string
+					apply func(string)
 				}
-
-				// Output guardrails
-				outResp, inspectErr := guardrails.DetectLegacy(ctx, service, models.DetectRequest{
-					Text:       content,
-					RID:        rid + "-OUT",
-					Guardrails: guardrailsList,
-				})
-				if inspectErr != nil {
-					writeOpenAIError(w, http.StatusInternalServerError, "Guardrail inspection failed", "guardrail_error")
+				var targets []outputTarget
+				if content, ok := msg["content"].(string); ok && content != "" {
+					targets = append(targets, outputTarget{text: content, apply: func(value string) { msg["content"] = value }})
+				}
+				toolCalls, toolCallsOK := msg["tool_calls"].([]interface{})
+				if _, present := msg["tool_calls"]; present && !toolCallsOK {
+					writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream tool call payload", "guardrail_error")
 					return
 				}
-
-				outputDetects = append(outputDetects, outResp)
-
-				logGatewayDetectSummary("output-nonstream", rid, outResp)
-
-				if outResp.Blocked {
-					msgText := outResp.Message
-					if msgText == "" {
-						msgText = "Assistant response blocked by TSZ security policy"
-					}
-
-					triggeredGuardrails := computeTriggeredGuardrails(inputDetects, outputDetects)
-					log.Printf("[gateway] RID=%s blocked on output guardrails: %s (gateway_block_mode=%s, guardrails=%v)", rid, msgText, config.AppConfig.GatewayBlockMode, triggeredGuardrails)
-
-					if config.AppConfig.GatewayBlockMode == "BLOCK" {
-						meta := map[string]interface{}{
-							"rid":        rid,
-							"guardrails": triggeredGuardrails,
-							"input":      inputDetects,
-							"output":     outputDetects,
-						}
-
-						writeOpenAIErrorWithMeta(w, http.StatusBadRequest, msgText, "tsz_output_blocked", meta)
+				for _, rawCall := range toolCalls {
+					call, callOK := rawCall.(map[string]interface{})
+					function, functionOK := call["function"].(map[string]interface{})
+					_, idOK := call["id"].(string)
+					callType, typeOK := call["type"].(string)
+					_, nameOK := function["name"].(string)
+					arguments, argumentsOK := function["arguments"].(string)
+					if !callOK || !functionOK || !idOK || !typeOK || callType != "function" || !nameOK || !argumentsOK {
+						writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream tool call payload", "guardrail_error")
 						return
 					}
-
+					targetFunction := function
+					targets = append(targets, outputTarget{text: arguments, apply: func(value string) { targetFunction["arguments"] = value }})
 				}
 
-				if outResp.RedactedText != "" {
-					msg["content"] = outResp.RedactedText
-					choiceMap["message"] = msg
-					choicesRaw[i] = choiceMap
+				for _, target := range targets {
+					outResp, inspectErr := guardrails.DetectLegacy(ctx, service, models.DetectRequest{Text: target.text, RID: rid + "-OUT", Guardrails: guardrailsList})
+					if inspectErr != nil {
+						writeOpenAIError(w, http.StatusInternalServerError, "Guardrail inspection failed", "guardrail_error")
+						return
+					}
+					outputDetects = append(outputDetects, outResp)
+					logGatewayDetectSummary("output-nonstream", rid, outResp)
+					if outResp.Blocked {
+						msgText := outResp.Message
+						if msgText == "" {
+							msgText = "Assistant response blocked by TSZ security policy"
+						}
+						triggeredGuardrails := computeTriggeredGuardrails(inputDetects, outputDetects)
+						log.Printf("[gateway] RID=%s blocked on output guardrails: %s (gateway_block_mode=%s, guardrails=%v)", rid, msgText, config.AppConfig.GatewayBlockMode, triggeredGuardrails)
+						if config.AppConfig.GatewayBlockMode == "BLOCK" {
+							meta := map[string]interface{}{"rid": rid, "guardrails": triggeredGuardrails, "input": inputDetects, "output": outputDetects}
+							writeOpenAIErrorWithMeta(w, http.StatusBadRequest, msgText, "tsz_output_blocked", meta)
+							return
+						}
+					}
+					if outResp.RedactedText != "" {
+						target.apply(outResp.RedactedText)
+					}
 				}
+				choiceMap["message"] = msg
+				choicesRaw[i] = choiceMap
 			}
 
 			triggeredGuardrails := computeTriggeredGuardrails(inputDetects, outputDetects)

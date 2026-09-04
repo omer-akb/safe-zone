@@ -186,9 +186,13 @@ buffered check completes.
 
 This guarantee applies to buffered, non-streaming OpenAI Chat Completions and
 Responses API text fields, including system messages and Responses API
-`instructions`, as well as assistant input history. Responses API streaming,
-tool payloads and multimodal non-text data remain
+`instructions`, assistant input history, tool-call arguments, and tool results.
+Streaming tool payloads, Responses API streaming, and multimodal non-text data remain
 outside the current guarantee.
+
+Tool-call inspection validates the supported payload shape and applies content
+guardrails to serialized arguments and returned text. It does not authorize or
+execute tools, and it never changes tool identity.
 
 #### Trust boundaries and policy authority
 

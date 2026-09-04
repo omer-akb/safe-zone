@@ -198,7 +198,7 @@ func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request
 			categorySet[category] = struct{}{}
 		}
 		if action == ActionMask {
-			mutations = append(mutations, ChatContentMutation{MessageIndex: content.MessageIndex, Content: inspection.SafeContent})
+			mutations = append(mutations, ChatContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
 	result.Metadata = SafeMetadata{
@@ -252,7 +252,7 @@ func (p *OpenAIRequestProcessor) processChatResponse(ctx context.Context, reques
 	for _, content := range chat.AssistantContents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
-			return ProcessingResult{}, fmt.Errorf("inspect assistant choice %d: %w", content.ChoiceIndex, err)
+			return ProcessingResult{}, fmt.Errorf("inspect response content %s: %w", content.JSONPath, err)
 		}
 		action, err := actionFromGuardrail(inspection.Action)
 		if err != nil {
@@ -264,7 +264,7 @@ func (p *OpenAIRequestProcessor) processChatResponse(ctx context.Context, reques
 			categorySet[category] = struct{}{}
 		}
 		if action == ActionMask {
-			mutations = append(mutations, ChatResponseContentMutation{ChoiceIndex: content.ChoiceIndex, Content: inspection.SafeContent})
+			mutations = append(mutations, ChatResponseContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
 	result.Metadata = SafeMetadata{
@@ -343,7 +343,7 @@ func (p *OpenAIRequestProcessor) processResponsesResponse(ctx context.Context, r
 	categorySet := make(map[string]struct{})
 	mutations := make([]ResponsesContentMutation, 0)
 	started := time.Now()
-	for _, content := range responses.AssistantContents {
+	for _, content := range responses.Contents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
 			return ProcessingResult{}, fmt.Errorf("inspect Responses API output %s: %w", content.JSONPath, err)
