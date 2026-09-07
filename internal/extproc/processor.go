@@ -160,6 +160,13 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 }
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isMCPMessage(request.ContentType, request.Body) {
+		payload, err := ParseMCPRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, false)
+	}
 	// Responses also accepts string input, so select embeddings by endpoint
 	// before attempting body-shape detection for other content adapters.
 	if isEmbeddingsRequest(request) {
@@ -261,6 +268,13 @@ func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request
 }
 
 func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isMCPMessage(request.ContentType, request.Body) && request.RPCMethod != "" {
+		payload, err := ParseMCPResponse(request.ContentType, request.Body, request.RPCMethod)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, true)
+	}
 	if isEmbeddingsRequest(request) {
 		// Embeddings support is input-only. Preserve vectors and provider error
 		// responses; neither is assistant text requiring output inspection.

@@ -49,8 +49,11 @@ type ProcessingRequest struct {
 	// RequestPath is the original request URI, retained for response processing.
 	// Adapters must derive it from request routing data, never response headers.
 	RequestPath string
-	RID         string
-	EnvoyReqID  string
+	// RPCMethod correlates a request body with a response whose wire format does
+	// not repeat the method, such as MCP JSON-RPC over Streamable HTTP.
+	RPCMethod  string
+	RID        string
+	EnvoyReqID string
 	// TraceID remains empty unless a future trusted gateway source supplies it.
 	// Client-controlled trace headers are intentionally not trusted here.
 	TraceID string

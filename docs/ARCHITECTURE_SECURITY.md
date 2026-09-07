@@ -206,6 +206,14 @@ so embedding vectors and provider error responses pass through unchanged without
 being interpreted as assistant text. Response headers cannot select this bypass.
 See the API reference for supported input shapes and routing requirements.
 
+Buffered MCP Streamable HTTP JSON-RPC messages receive bidirectional content
+inspection. TSZ checks `prompts/get` arguments and returned text messages, plus
+`tools/call` arguments and returned text, embedded text resources and structured
+content. It preserves JSON-RPC routing fields, tool identity, binary content and
+annotations. This control does not authorize tool execution or select trusted
+MCP servers; malformed covered content follows the route failure policy. MCP SSE
+and stdio traffic are outside the Envoy adapter's enforcement boundary.
+
 #### Trust boundaries and policy authority
 
 - The client is untrusted. Its guardrail or policy headers never select the

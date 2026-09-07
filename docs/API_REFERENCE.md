@@ -707,6 +707,7 @@ The supported non-streaming content fields are:
 | Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for system/user/assistant/tool messages, assistant `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant `text`/`refusal` fields in content arrays, and `choices[].message.tool_calls[].function.arguments` |
 | Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
 | Embeddings (OpenAI-compatible) | Non-empty string `input` or non-empty array of non-empty strings; every item is inspected independently | Input-only: vectors, usage and provider errors pass through unchanged |
+| MCP Streamable HTTP | `prompts/get` string arguments and `tools/call` JSON-object arguments | Prompt text and embedded text resources; tool-result text, embedded text resources and `structuredContent` objects |
 | Anthropic Messages | Top-level string or text-block `system`; user/assistant string and text-block content; `tool_use.input`; string or text-block `tool_result.content` | Assistant text blocks and `tool_use.input` |
 | Gemini GenerateContent | `systemInstruction` and `contents[].parts[].text`; `functionCall.args`, `functionResponse.response`, server `toolCall.args`/`toolResponse.response`, executable code and execution output | The corresponding supported fields in `candidates[].content.parts[]` |
 
@@ -723,10 +724,10 @@ this capability yet. Anthropic requests are selected using the required
 | --- | --- |
 | `ALLOW` | Continue without changing the body. |
 | `AUDIT_ONLY` | Continue without changing the body. |
-| `MASK` | Replace only the unsafe assistant-content strings and update `content-length`. |
+| `MASK` | Replace unsafe supported content fields and update `content-length`. |
 | `BLOCK` | Replace the upstream response with a safe local `403` response. |
 
-This scope does **not** guarantee Responses, Anthropic, or Gemini streaming enforcement.
+This scope does **not** guarantee Responses, Anthropic, Gemini, or MCP streaming enforcement.
 Configure both request and response bodies as `Buffered`; do not attach this
 profile to a route that requires an unbuffered or Responses SSE safety
 guarantee.
@@ -768,6 +769,43 @@ provider/model token-limit validation are not implemented by this adapter.
 Embedding responses are outside content inspection, including when response
 policies are enabled. This feature adds BYG inspection, not a standalone TSZ
 `POST /v1/embeddings` proxy endpoint. Use buffered processing.
+
+#### MCP prompt and tool-payload guardrails
+
+The BYG processor supports individual, buffered MCP JSON-RPC 2.0 messages over
+Streamable HTTP using the MCP **2025-06-18** content shapes. It identifies MCP
+from the top-level `jsonrpc: "2.0"` field, so the public MCP endpoint may use any
+path. The Envoy adapter retains the request method to interpret the matching
+JSON-RPC response safely; response bodies cannot select their own method. The
+following content is inspected with the policy snapshot pinned to the request:
+
+- `prompts/get` request `params.arguments` string map
+- `tools/call` request `params.arguments` JSON object
+- `prompts/get` response message `content.text` and embedded
+  `content.resource.text`
+- `tools/call` response `content[].text`, embedded resource text and
+  `structuredContent` JSON object, including results with `isError: true`
+
+`ALLOW` and `AUDIT_ONLY` preserve the original body. `MASK` changes only the
+extracted fields and updates `content-length`. A request-side `BLOCK` prevents
+the MCP server call; a response-side `BLOCK` prevents the result from reaching
+the client. Metadata uses adapter `mcp_jsonrpc` and never includes arguments,
+prompt text, tool results or raw detections.
+
+Tool and prompt names, JSON-RPC IDs, annotations and unrelated fields remain
+unchanged. Image, audio and embedded-resource blob bytes are preserved without
+inspection. Resource links are preserved. Unknown content variants, malformed
+covered payloads, duplicate JSON keys and mutations that would make a structured
+object invalid are processing errors and follow the configured failure policy.
+MCP initialization, discovery, notifications and protocol-error responses pass
+through because they do not contain prompt or tool payloads covered here.
+
+This adapter performs content guardrails only. It does not authorize tool
+execution, decide which MCP server or tool may be used, validate tool schemas,
+or enforce MCP authentication and `Origin` checks; those controls remain with
+the gateway and MCP client/server. Configure both request and response bodies as
+`Buffered`. MCP SSE messages, stdio transport, JSON-RPC batching, resource-read
+payloads and binary content inspection are outside this capability.
 
 #### Envoy attachment and runtime settings
 
