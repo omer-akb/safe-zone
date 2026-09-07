@@ -115,3 +115,7 @@ conflict domains, owned resource lifecycle, capability rejection, and failed
 updates without changing the guardrail engine. This is a test fixture, not a
 shipping gateway. The API-server tests cover selector defaulting, immutability,
 and lossless alpha/beta upgrade behavior.
+
+For the normative data-plane boundary, capability declaration rules, native
+adapter lifecycle, testing obligations, and release checklist, see the
+[gateway adapter development contract](ADAPTER_DEVELOPMENT.md).

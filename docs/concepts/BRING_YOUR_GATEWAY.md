@@ -27,6 +27,8 @@ records why direct xDS control-plane integration remains experimental.
 Native attachments select an installed adapter with `spec.adapter`, defaulting
 to `envoy-gateway`. See [native gateway adapters](../integrations/NATIVE_GATEWAY_ADAPTERS.md)
 for capability rejection, compatibility, and the controller extension boundary.
+Contributors adding another gateway must also follow the normative
+[gateway adapter development contract](../integrations/ADAPTER_DEVELOPMENT.md).
 
 ## MVP compatibility decision
 
