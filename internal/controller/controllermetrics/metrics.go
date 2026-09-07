@@ -11,6 +11,10 @@ import (
 )
 
 var (
+	managedAdapterResources = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "tsz_controller_managed_adapter_resources",
+		Help: "Current number of native resources managed by each installed TSZ adapter.",
+	}, []string{"adapter"})
 	reconcileDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "tsz_controller_reconcile_duration_seconds",
 		Help: "Time spent reconciling TSZ control-plane resources.",
@@ -30,7 +34,7 @@ var (
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(reconcileDuration, effectivePolicyConflicts, policyActivations, managedExtensionPolicies)
+	ctrlmetrics.Registry.MustRegister(reconcileDuration, effectivePolicyConflicts, policyActivations, managedExtensionPolicies, managedAdapterResources)
 	// Initialize the normal success paths so all documented metric families are
 	// discoverable before the first attachment is reconciled.
 	reconcileDuration.WithLabelValues("tszguardrailpolicy", "success").Observe(0)
@@ -46,3 +50,11 @@ func IncEffectivePolicyConflict() { effectivePolicyConflicts.Inc() }
 func IncPolicyActivation(result string) { policyActivations.WithLabelValues(result).Inc() }
 
 func SetManagedExtensionPolicies(count int) { managedExtensionPolicies.Set(float64(count)) }
+
+func SetManagedAdapterResources(adapter string, count int) {
+	managedAdapterResources.WithLabelValues(adapter).Set(float64(count))
+	// Preserve the existing Envoy dashboard metric during the transition.
+	if adapter == "envoy-gateway" {
+		SetManagedExtensionPolicies(count)
+	}
+}

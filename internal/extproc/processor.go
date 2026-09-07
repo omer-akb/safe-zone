@@ -2,6 +2,7 @@ package extproc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -47,9 +48,9 @@ func (AllowProcessor) Process(ctx context.Context, request ProcessingRequest) (P
 	return ProcessingResult{Action: ActionAllow}, nil
 }
 
-// OpenAIRequestProcessor applies a stream-pinned policy to supported OpenAI
-// request and non-streaming response content. It never performs floating
-// policy lookups.
+// OpenAIRequestProcessor applies a stream-pinned policy to supported provider
+// request and non-streaming response content. The historical name is retained
+// for compatibility. It never performs floating policy lookups.
 type OpenAIRequestProcessor struct {
 	service guardrails.GuardrailService
 }
@@ -69,8 +70,8 @@ func (p *OpenAIRequestProcessor) Process(ctx context.Context, request Processing
 		return ProcessingResult{}, err
 	}
 	// Headers, empty bodies and routes without a loaded snapshot are protocol
-	// ALLOW paths. Response enforcement is limited to buffered non-streaming
-	// Chat Completions bodies.
+	// ALLOW paths. Buffered Chat Completions and Responses API bodies are
+	// enforced here; streaming continues through the optional window processor.
 	if request.Body == nil || request.PolicySnapshot == nil {
 		return ProcessingResult{Action: ActionAllow}, nil
 	}
@@ -159,10 +160,63 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 }
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isMCPMessage(request.ContentType, request.Body) {
+		payload, err := ParseMCPRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, false)
+	}
+	// Responses also accepts string input, so select embeddings by endpoint
+	// before attempting body-shape detection for other content adapters.
+	if isEmbeddingsRequest(request) {
+		payload, err := ParseEmbeddingsRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, false)
+	}
+	if isAnthropicMessagesRequest(request) {
+		anthropic, err := ParseAnthropicRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, anthropic, false)
+	}
 	chat, err := ParseChatRequest(request.ContentType, request.Body)
-	if err != nil {
+	if err == nil {
+		return p.processChatRequest(ctx, request, chat)
+	}
+	if !errors.Is(err, ErrUnsupportedChatRequest) {
 		return ProcessingResult{}, err
 	}
+	responses, responsesErr := ParseResponsesRequest(request.ContentType, request.Body)
+	if responsesErr == nil {
+		return p.processResponsesRequest(ctx, request, responses)
+	}
+	if !errors.Is(responsesErr, ErrUnsupportedResponsesPayload) {
+		return ProcessingResult{}, responsesErr
+	}
+	gemini, geminiErr := ParseGeminiRequest(request.ContentType, request.Body)
+	if geminiErr != nil {
+		if errors.Is(geminiErr, ErrUnsupportedProviderPayload) {
+			return ProcessingResult{}, responsesErr
+		}
+		return ProcessingResult{}, geminiErr
+	}
+	return p.processProviderPayload(ctx, request, gemini, false)
+}
+
+func isAnthropicMessagesRequest(request ProcessingRequest) bool {
+	if FirstHeader(request.Headers, "anthropic-version") != "" {
+		return true
+	}
+	parser := jsonSourceParser{source: request.Body}
+	root, err := parser.parseDocument()
+	return err == nil && root.kind == jsonObject && root.object["anthropic_version"] != nil
+}
+
+func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request ProcessingRequest, chat *ChatRequest) (ProcessingResult, error) {
 	rules, err := compiledGuardrailRules(*request.PolicySnapshot)
 	if err != nil {
 		return ProcessingResult{}, err
@@ -171,10 +225,10 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 	categorySet := make(map[string]struct{})
 	mutations := make([]ChatContentMutation, 0)
 	started := time.Now()
-	for _, content := range chat.UserContents {
+	for _, content := range chat.Contents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
-			return ProcessingResult{}, fmt.Errorf("inspect user message %d: %w", content.MessageIndex, err)
+			return ProcessingResult{}, fmt.Errorf("inspect %s message %d: %w", content.Role, content.MessageIndex, err)
 		}
 		action, err := actionFromGuardrail(inspection.Action)
 		if err != nil {
@@ -186,7 +240,7 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 			categorySet[category] = struct{}{}
 		}
 		if action == ActionMask {
-			mutations = append(mutations, ChatContentMutation{MessageIndex: content.MessageIndex, Content: inspection.SafeContent})
+			mutations = append(mutations, ChatContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
 	result.Metadata = SafeMetadata{
@@ -214,10 +268,52 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 }
 
 func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isMCPMessage(request.ContentType, request.Body) && request.RPCMethod != "" {
+		payload, err := ParseMCPResponse(request.ContentType, request.Body, request.RPCMethod)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, true)
+	}
+	if isEmbeddingsRequest(request) {
+		// Embeddings support is input-only. Preserve vectors and provider error
+		// responses; neither is assistant text requiring output inspection.
+		result := ProcessingResult{Action: ActionAllow}
+		result.Metadata = providerResultMetadata(request, embeddingsProvider, result, nil, time.Now())
+		return result, nil
+	}
 	chat, err := ParseChatResponse(request.ContentType, request.Body)
-	if err != nil {
+	if err == nil {
+		return p.processChatResponse(ctx, request, chat)
+	}
+	if !errors.Is(err, ErrUnsupportedChatResponse) {
 		return ProcessingResult{}, err
 	}
+	responses, responsesErr := ParseResponsesResponse(request.ContentType, request.Body)
+	if responsesErr == nil {
+		return p.processResponsesResponse(ctx, request, responses)
+	}
+	if !errors.Is(responsesErr, ErrUnsupportedResponsesPayload) {
+		return ProcessingResult{}, responsesErr
+	}
+	anthropic, anthropicErr := ParseAnthropicResponse(request.ContentType, request.Body)
+	if anthropicErr == nil {
+		return p.processProviderPayload(ctx, request, anthropic, true)
+	}
+	if !errors.Is(anthropicErr, ErrUnsupportedProviderPayload) {
+		return ProcessingResult{}, anthropicErr
+	}
+	gemini, geminiErr := ParseGeminiResponse(request.ContentType, request.Body)
+	if geminiErr != nil {
+		if errors.Is(geminiErr, ErrUnsupportedProviderPayload) {
+			return ProcessingResult{}, responsesErr
+		}
+		return ProcessingResult{}, geminiErr
+	}
+	return p.processProviderPayload(ctx, request, gemini, true)
+}
+
+func (p *OpenAIRequestProcessor) processChatResponse(ctx context.Context, request ProcessingRequest, chat *ChatResponse) (ProcessingResult, error) {
 	rules, err := compiledResponseGuardrailRules(*request.PolicySnapshot)
 	if err != nil {
 		return ProcessingResult{}, err
@@ -229,7 +325,7 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 	for _, content := range chat.AssistantContents {
 		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
 		if err != nil {
-			return ProcessingResult{}, fmt.Errorf("inspect assistant choice %d: %w", content.ChoiceIndex, err)
+			return ProcessingResult{}, fmt.Errorf("inspect response content %s: %w", content.JSONPath, err)
 		}
 		action, err := actionFromGuardrail(inspection.Action)
 		if err != nil {
@@ -241,7 +337,7 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 			categorySet[category] = struct{}{}
 		}
 		if action == ActionMask {
-			mutations = append(mutations, ChatResponseContentMutation{ChoiceIndex: content.ChoiceIndex, Content: inspection.SafeContent})
+			mutations = append(mutations, ChatResponseContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
 	result.Metadata = SafeMetadata{
@@ -269,6 +365,152 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 	result.Body = body
 	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
 	return result, nil
+}
+
+func (p *OpenAIRequestProcessor) processResponsesRequest(ctx context.Context, request ProcessingRequest, responses *ResponsesRequest) (ProcessingResult, error) {
+	rules, err := compiledGuardrailRules(*request.PolicySnapshot)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categorySet := make(map[string]struct{})
+	mutations := make([]ResponsesContentMutation, 0)
+	started := time.Now()
+	for _, content := range responses.Contents {
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if err != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect Responses API input %s: %w", content.JSONPath, err)
+		}
+		action, err := actionFromGuardrail(inspection.Action)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categorySet[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = providerResultMetadata(request, "openai_responses", result, categorySet, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		return result, nil
+	}
+	body, err := responses.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func (p *OpenAIRequestProcessor) processResponsesResponse(ctx context.Context, request ProcessingRequest, responses *ResponsesResponse) (ProcessingResult, error) {
+	rules, err := compiledResponseGuardrailRules(*request.PolicySnapshot)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categorySet := make(map[string]struct{})
+	mutations := make([]ResponsesContentMutation, 0)
+	started := time.Now()
+	for _, content := range responses.Contents {
+		inspection, err := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if err != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect Responses API output %s: %w", content.JSONPath, err)
+		}
+		action, err := actionFromGuardrail(inspection.Action)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categorySet[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = providerResultMetadata(request, "openai_responses", result, categorySet, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		if result.Action == ActionBlock {
+			result.ImmediateStatus = 403
+		}
+		return result, nil
+	}
+	body, err := responses.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func (p *OpenAIRequestProcessor) processProviderPayload(ctx context.Context, request ProcessingRequest, payload *ProviderPayload, response bool) (ProcessingResult, error) {
+	var rules *guardrails.CompiledPolicyRules
+	var err error
+	if response {
+		rules, err = compiledResponseGuardrailRules(*request.PolicySnapshot)
+	} else {
+		rules, err = compiledGuardrailRules(*request.PolicySnapshot)
+	}
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categories := make(map[string]struct{})
+	mutations := make([]ProviderContentMutation, 0)
+	started := time.Now()
+	for _, content := range payload.Contents {
+		inspection, inspectErr := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if inspectErr != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect %s content %s: %w", payload.Provider, content.JSONPath, inspectErr)
+		}
+		action, actionErr := actionFromGuardrail(inspection.Action)
+		if actionErr != nil {
+			return ProcessingResult{}, actionErr
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categories[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ProviderContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = providerResultMetadata(request, payload.Provider, result, categories, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		if response && result.Action == ActionBlock {
+			result.ImmediateStatus = 403
+		}
+		return result, nil
+	}
+	body, err := payload.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func providerResultMetadata(request ProcessingRequest, adapter string, result ProcessingResult, categories map[string]struct{}, started time.Time) SafeMetadata {
+	metadata := SafeMetadata{
+		RequestID: request.EnvoyReqID, RID: request.RID, PolicyID: request.PolicyID,
+		PolicyVersion: request.PolicyVersion, Adapter: adapter, Stage: request.Stage,
+		Action: result.Action, DetectionCount: result.DetectionCount,
+		ProcessorLatencyMS: time.Since(started).Milliseconds(),
+	}
+	for category := range categories {
+		metadata.Categories = append(metadata.Categories, category)
+	}
+	sort.Strings(metadata.Categories)
+	return metadata
 }
 
 // inspectWithTrace creates a latency span around deterministic and semantic

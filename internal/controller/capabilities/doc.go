@@ -1,2 +1,2 @@
-// Package capabilities will discover gateway capabilities.
+// Package capabilities validates policy requirements against trusted adapter declarations.
 package capabilities

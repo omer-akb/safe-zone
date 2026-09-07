@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/extproc/policy"
 )
 
@@ -32,7 +32,7 @@ type ResolutionResult struct {
 // Resolve validates that the named policy exists and resolves its requested
 // immutable version. Omitted versions are rejected so an attachment never
 // floats to a later active snapshot.
-func (r *ReferenceResolver) Resolve(ctx context.Context, ref *securityv1alpha1.PolicyReference, tenant *string) ResolutionResult {
+func (r *ReferenceResolver) Resolve(ctx context.Context, ref *securityv1beta1.PolicyReference, tenant *string) ResolutionResult {
 	if r == nil || r.Repo == nil {
 		return ResolutionResult{Reason: ResolutionProcessorUnavailable, Err: errors.New("policy repository is required")}
 	}

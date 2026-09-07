@@ -70,6 +70,7 @@ type envoyStreamState struct {
 	windowedResponse    *sseWindow
 	completedSSEEvents  []OpenAISSEEvent
 	streamBufferLimit   int
+	rpcMethod           string
 }
 
 func (state *envoyStreamState) setStreamBufferLimit(limit int) {
@@ -122,6 +123,8 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 			state.responseSSE = NewOpenAISSEParser(state.streamBufferLimit)
 		}
 		request := contractRequest(StageResponse, headers, nil, attributes)
+		request.RequestPath = FirstHeader(state.request.headers, ":path")
+		request.RPCMethod = state.rpcMethod
 		request.EndOfStream = typed.ResponseHeaders.GetEndOfStream()
 		return request, envoyResponseHeaders, nil
 	case *extprocv3.ProcessingRequest_RequestBody:
@@ -131,6 +134,7 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 		state.requestBodySeen = true
 		state.requestEnded = typed.RequestBody.GetEndOfStream()
 		request := contractRequest(StageRequest, state.request.headers, typed.RequestBody.GetBody(), attributes)
+		state.rpcMethod = request.RPCMethod
 		request.EndOfStream = typed.RequestBody.GetEndOfStream()
 		return request, envoyRequestBody, nil
 	case *extprocv3.ProcessingRequest_ResponseBody:
@@ -152,6 +156,8 @@ func requestFromEnvoy(message *extprocv3.ProcessingRequest, state *envoyStreamSt
 			}
 		}
 		request := contractRequest(StageResponse, state.response.headers, typed.ResponseBody.GetBody(), attributes)
+		request.RequestPath = FirstHeader(state.request.headers, ":path")
+		request.RPCMethod = state.rpcMethod
 		request.EndOfStream = typed.ResponseBody.GetEndOfStream()
 		return request, envoyResponseBody, nil
 	case *extprocv3.ProcessingRequest_RequestTrailers, *extprocv3.ProcessingRequest_ResponseTrailers:
@@ -263,14 +269,19 @@ func isSSEContentType(contentType string) bool {
 func contractRequest(stage ProcessingStage, headers map[string][]string, body []byte, attributes map[string]string) ProcessingRequest {
 	requestID := FirstHeader(headers, "x-request-id")
 	traceParent, traceID := trustedTraceContext(attributes)
-	return ProcessingRequest{
-		EnvoyReqID: requestID, TraceID: traceID, TraceParent: traceParent, Stage: stage,
+	request := ProcessingRequest{
+		RequestPath: FirstHeader(headers, ":path"),
+		EnvoyReqID:  requestID, TraceID: traceID, TraceParent: traceParent, Stage: stage,
 		Headers: CloneHeaders(headers), Body: append([]byte(nil), body...),
 		ContentType: FirstHeader(headers, "content-type"),
 		Gateway:     FirstHeader(headers, "x-tsz-gateway"), Route: FirstHeader(headers, "x-tsz-route"),
 		Tenant:     FirstHeader(headers, "x-tsz-tenant"),
 		Attributes: attributes,
 	}
+	if stage == StageRequest {
+		request.RPCMethod = MCPMethodFromMessage(request.ContentType, body)
+	}
+	return request
 }
 
 func trustedTraceContext(attributes map[string]string) (string, string) {

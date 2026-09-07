@@ -178,13 +178,41 @@ Client (untrusted)
 ```
 
 For an allowed response, Envoy forwards the original response. For a masked
-response, TSZ changes only `choices[].message.content` strings. For a blocked
-response, Envoy returns a safe local `403` response instead of the upstream
-body. The raw upstream response may reach Envoy and the internal processor,
-but it is not released to the client before this buffered check completes.
+response, TSZ changes only supported OpenAI, Anthropic Messages, or Gemini
+GenerateContent text and structured tool-payload fields. For a blocked response,
+Envoy returns a safe local `403` response
+instead of the upstream body. The raw upstream response may reach Envoy and
+the internal processor, but it is not released to the client before this
+buffered check completes.
 
-This guarantee applies only to buffered, non-streaming OpenAI Chat
-Completions responses. It is not a streaming/SSE safety guarantee.
+This guarantee applies to buffered, non-streaming OpenAI Chat Completions,
+Responses API, Anthropic Messages, and Gemini GenerateContent fields documented
+in the API reference, including text nested in supported multimodal content,
+system instructions, assistant history, tool-call arguments, and tool results.
+Provider streaming formats and inspection of multimodal image/audio/file data
+remain outside the current guarantee.
+
+Tool-call inspection validates the supported payload shape and applies content
+guardrails to serialized arguments and returned text. Structured Anthropic and
+Gemini tool payload masks must remain valid JSON objects. Inspection does not
+authorize or execute tools, and it never changes tool identity.
+
+Embeddings support is input-only for OpenAI-compatible `/v1/embeddings` and
+`/embeddings` routes. Every string input is checked with the pinned request
+policy; any blocking item blocks the entire request. Token ID inputs cannot be
+inspected and produce processing errors subject to the configured failure mode.
+The original request path selects this adapter and is retained across the stream,
+so embedding vectors and provider error responses pass through unchanged without
+being interpreted as assistant text. Response headers cannot select this bypass.
+See the API reference for supported input shapes and routing requirements.
+
+Buffered MCP Streamable HTTP JSON-RPC messages receive bidirectional content
+inspection. TSZ checks `prompts/get` arguments and returned text messages, plus
+`tools/call` arguments and returned text, embedded text resources and structured
+content. It preserves JSON-RPC routing fields, tool identity, binary content and
+annotations. This control does not authorize tool execution or select trusted
+MCP servers; malformed covered content follows the route failure policy. MCP SSE
+and stdio traffic are outside the Envoy adapter's enforcement boundary.
 
 #### Trust boundaries and policy authority
 

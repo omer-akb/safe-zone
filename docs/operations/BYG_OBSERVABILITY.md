@@ -59,6 +59,12 @@ version mismatch across replicas. Establish a baseline first; action volume
 alone is not inherently an incident because a policy rollout can legitimately
 change it.
 
+The controller exposes `tsz_controller_managed_adapter_resources{adapter="envoy-gateway"}`
+for resource counts per installed native adapter. Label values come only from
+registered controller implementations. The existing
+`tsz_controller_managed_extension_policies` gauge remains available with the
+same Envoy-only meaning for existing dashboards.
+
 ## Tracing operations
 
 Enable OTLP only with a controlled collector endpoint and TLS in production.

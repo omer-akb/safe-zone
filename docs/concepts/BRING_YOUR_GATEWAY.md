@@ -13,12 +13,20 @@ upstream service.
 | Envoy Gateway native / managed | Supported | A `TSZGuardrailPolicy` CRD is reconciled by `tsz-controller` into the policy snapshot, Envoy attachment, and native route-to-policy binding. |
 | Envoy AI Gateway | Deferred | Not part of the Envoy Gateway-only MVP and not compatibility-tested. Provider transformations, filter ordering, token-usage metadata, routing and fallback preservation require a dedicated AI Gateway test environment. |
 | Other Envoy-compatible gateways | Experimental | A gateway must support Envoy `ext_proc`; operators use the portable profile until a typed adapter is available. |
-| Gateway-specific adapters beyond Envoy Gateway | Planned | Capability discovery and additional native attachment adapters are future work. |
+| Gateway-specific adapters beyond Envoy Gateway | Planned | The native adapter registry and policy selector are available; concrete additional gateway integrations remain Phase 7 work. |
 
 The Envoy Gateway installation guide is at
 [integrations/ENVOY_GATEWAY.md](../integrations/ENVOY_GATEWAY.md).
+The native `TSZGuardrailPolicy` API is `security.thyris.ai/v1beta1`; the original
+`v1alpha1` API remains served for compatibility. The
+[API graduation record](../operations/TSZ_POLICY_API_UPGRADE.md) documents the
+schema-preserving transition, verification evidence and open GA feedback gates.
 The [Extension Server security evaluation](../security/BYG_EXTENSION_SERVER_EVALUATION.md)
 records why direct xDS control-plane integration remains experimental.
+
+Native attachments select an installed adapter with `spec.adapter`, defaulting
+to `envoy-gateway`. See [native gateway adapters](../integrations/NATIVE_GATEWAY_ADAPTERS.md)
+for capability rejection, compatibility, and the controller extension boundary.
 
 ## MVP compatibility decision
 

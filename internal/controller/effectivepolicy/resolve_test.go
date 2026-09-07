@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/extproc/policy"
 )
 
@@ -14,7 +14,7 @@ func TestReferenceResolverResolvesCompiledAndActiveVersions(t *testing.T) {
 	for _, status := range []policy.SnapshotStatus{policy.StatusCompiled, policy.StatusActive} {
 		t.Run(string(status), func(t *testing.T) {
 			resolver := ReferenceResolver{Repo: referenceRepository{snapshot: policy.PolicySnapshot{Status: status}}}
-			result := resolver.Resolve(context.Background(), &securityv1alpha1.PolicyReference{Name: "payments", Version: &version}, nil)
+			result := resolver.Resolve(context.Background(), &securityv1beta1.PolicyReference{Name: "payments", Version: &version}, nil)
 			if result.Reason != ResolutionResolved || result.Err != nil {
 				t.Fatalf("Resolve() = %+v, want resolved", result)
 			}
@@ -35,7 +35,7 @@ func TestReferenceResolverSeparatesNotFoundFromDatabaseFailure(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := (&ReferenceResolver{Repo: test.repository}).Resolve(context.Background(), &securityv1alpha1.PolicyReference{Name: "payments", Version: &version}, nil)
+			result := (&ReferenceResolver{Repo: test.repository}).Resolve(context.Background(), &securityv1beta1.PolicyReference{Name: "payments", Version: &version}, nil)
 			if result.Reason != test.reason || result.Err == nil {
 				t.Fatalf("Resolve() = %+v, want reason %q and error", result, test.reason)
 			}
@@ -46,7 +46,7 @@ func TestReferenceResolverSeparatesNotFoundFromDatabaseFailure(t *testing.T) {
 func TestReferenceResolverRejectsIncompatibleVersion(t *testing.T) {
 	version := int32(3)
 	resolver := ReferenceResolver{Repo: referenceRepository{snapshot: policy.PolicySnapshot{Status: policy.StatusSuperseded}}}
-	result := resolver.Resolve(context.Background(), &securityv1alpha1.PolicyReference{Name: "payments", Version: &version}, nil)
+	result := resolver.Resolve(context.Background(), &securityv1beta1.PolicyReference{Name: "payments", Version: &version}, nil)
 	if result.Reason != ResolutionVersionIncompatible || result.Err != nil {
 		t.Fatalf("Resolve() = %+v, want incompatible version without repository error", result)
 	}

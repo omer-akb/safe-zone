@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -32,7 +32,7 @@ type Resolver struct {
 // ResolveTargets resolves every target relative to the policy namespace.
 // LocalPolicyTargetReferenceWithSectionName deliberately has no namespace;
 // cross-namespace attachment is therefore not supported by this controller.
-func (r *Resolver) ResolveTargets(ctx context.Context, policy *securityv1alpha1.TSZGuardrailPolicy) []ResolvedTarget {
+func (r *Resolver) ResolveTargets(ctx context.Context, policy *securityv1beta1.TSZGuardrailPolicy) []ResolvedTarget {
 	resolved := make([]ResolvedTarget, 0, len(policy.Spec.TargetRefs))
 	for _, ref := range policy.Spec.TargetRefs {
 		resolved = append(resolved, r.resolveTarget(ctx, policy.Namespace, ref))

@@ -10,7 +10,10 @@ generate:
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 
 test-envtest: ## Run API-server-backed controller tests with pinned envtest assets.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use -p path $(ENVTEST_K8S_VERSION))" go test ./internal/controller/policyattach -run '^TestEnvtest' -count=1
+	@set -eu; \
+	assets="$$($(SETUP_ENVTEST) use -p path $(ENVTEST_K8S_VERSION))"; \
+	test -x "$$assets/kube-apiserver"; \
+	KUBEBUILDER_ASSETS="$$assets" go test ./internal/controller/policyattach -run '^TestEnvtest' -count=1 -v
 
 perf-extproc-regex-only: ## Run the BYG regex-only request-path load scenario against the Kind reference environment.
 	./tests/perf/run-extproc-regex-only.sh

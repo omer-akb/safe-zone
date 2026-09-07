@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,25 @@ func TestChatServesSSEFixtureEventByEvent(t *testing.T) {
 	}
 	if got := recorder.Body.String(); got != fixture {
 		t.Fatalf("body = %q, want fixture %q", got, fixture)
+	}
+}
+
+func TestResponsesServesBufferedResponsesAPIShape(t *testing.T) {
+	t.Setenv("BYG_MOCK_RESPONSE_CONTENT", "safe response")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	(&server{}).responses(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("content-type"); got != "application/json" {
+		t.Fatalf("content-type = %q, want application/json", got)
+	}
+	for _, expected := range []string{`"id":"resp-kind-mock"`, `"object":"response"`, `"type":"output_text"`, `"text":"safe response"`} {
+		if !strings.Contains(recorder.Body.String(), expected) {
+			t.Fatalf("body = %q, want %q", recorder.Body.String(), expected)
+		}
 	}
 }
 

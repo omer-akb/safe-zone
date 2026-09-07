@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"sort"
 	"strings"
 )
 
@@ -84,35 +85,39 @@ func (e *ChatResponseError) Error() string {
 
 func (e *ChatResponseError) Unwrap() error { return e.Err }
 
-// ChatUserContent identifies one supported mutable field in a Chat Completions
-// request. JSONPath is stable for diagnostics and does not contain content.
-type ChatUserContent struct {
+// ChatRequestContent identifies one supported mutable field in a Chat
+// Completions request. JSONPath is stable for diagnostics and does not contain
+// content.
+type ChatRequestContent struct {
+	ID           int
 	MessageIndex int
+	Role         string
 	JSONPath     string
 	Content      string
 	valueStart   int
 	valueEnd     int
 }
 
-// ChatContentMutation replaces exactly one user content field identified by
-// MessageIndex. Mutations can only target entries returned by ParseChatRequest.
+// ChatContentMutation replaces exactly one request content field identified by
+// ID. Mutations can only target entries returned by ParseChatRequest.
 type ChatContentMutation struct {
-	MessageIndex int
-	Content      string
+	ID      int
+	Content string
 }
 
 // ChatRequest is a gateway-neutral representation of the supported subset of
 // an OpenAI Chat Completions request. Its raw body remains private so callers
 // can only produce mutations through the checked method below.
 type ChatRequest struct {
-	UserContents []ChatUserContent
-	body         []byte
+	Contents []ChatRequestContent
+	body     []byte
 }
 
 // ChatAssistantContent identifies one supported assistant content field in a
 // non-streaming Chat Completions response. JSONPath is safe for diagnostics and
 // the source offsets allow a later masking phase to rewrite only this value.
 type ChatAssistantContent struct {
+	ID          int
 	ChoiceIndex int
 	JSONPath    string
 	Content     string
@@ -120,12 +125,12 @@ type ChatAssistantContent struct {
 	valueEnd    int
 }
 
-// ChatResponseContentMutation replaces exactly one assistant content field
-// identified by ChoiceIndex. Mutations can only target entries returned by
+// ChatResponseContentMutation replaces exactly one response content field
+// identified by ID. Mutations can only target entries returned by
 // ParseChatResponse.
 type ChatResponseContentMutation struct {
-	ChoiceIndex int
-	Content     string
+	ID      int
+	Content string
 }
 
 type ChatResponse struct {
@@ -202,19 +207,88 @@ func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
 			return nil, chatResponseError(ChatResponseUnsupportedResponse, fmt.Sprintf(".choices[%d].message.role", index), ErrUnsupportedChatResponse)
 		}
 		content := message.object["content"]
-		if content == nil || content.kind != jsonString {
+		toolCalls := message.object["tool_calls"]
+		refusal := message.object["refusal"]
+		hasRefusalContent := false
+		if refusal != nil {
+			refusalPath := fmt.Sprintf(".choices[%d].message.refusal", index)
+			switch {
+			case refusal.kind == jsonString:
+				hasRefusalContent = true
+				response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+					ID:          len(response.AssistantContents),
+					ChoiceIndex: index,
+					JSONPath:    refusalPath,
+					Content:     refusal.stringValue,
+					valueStart:  refusal.start,
+					valueEnd:    refusal.end,
+				})
+			case !isJSONNull(refusal, body):
+				return nil, chatResponseError(ChatResponseUnsupportedContent, refusalPath, ErrUnsupportedChatResponseContent)
+			}
+		}
+		if content != nil && content.kind == jsonString {
+			response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+				ID:          len(response.AssistantContents),
+				ChoiceIndex: index,
+				JSONPath:    path,
+				Content:     content.stringValue,
+				valueStart:  content.start,
+				valueEnd:    content.end,
+			})
+		} else if content != nil && content.kind == jsonArray {
+			if err := appendChatResponseContentParts(response, index, content); err != nil {
+				return nil, err
+			}
+		} else if content != nil && !((toolCalls != nil || hasRefusalContent) && isJSONNull(content, body)) {
 			return nil, chatResponseError(ChatResponseUnsupportedContent, path, ErrUnsupportedChatResponseContent)
 		}
-		response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
-			ChoiceIndex: index,
-			JSONPath:    path,
-			Content:     content.stringValue,
-			valueStart:  content.start,
-			valueEnd:    content.end,
-		})
+		if toolCalls != nil {
+			if err := appendChatResponseToolCalls(response, index, toolCalls); err != nil {
+				return nil, err
+			}
+		}
+		if content == nil && toolCalls == nil && !hasRefusalContent {
+			return nil, chatResponseError(ChatResponseUnsupportedContent, path, ErrUnsupportedChatResponseContent)
+		}
 	}
 
 	return response, nil
+}
+
+func appendChatResponseContentParts(response *ChatResponse, choiceIndex int, content *jsonNode) error {
+	if len(content.array) == 0 {
+		return chatResponseError(ChatResponseUnsupportedContent, fmt.Sprintf(".choices[%d].message.content", choiceIndex), ErrUnsupportedChatResponseContent)
+	}
+	for contentIndex, part := range content.array {
+		base := fmt.Sprintf(".choices[%d].message.content[%d]", choiceIndex, contentIndex)
+		if part.kind != jsonObject {
+			return chatResponseError(ChatResponseUnsupportedContent, base, ErrUnsupportedChatResponseContent)
+		}
+		partType := part.object["type"]
+		if partType == nil || partType.kind != jsonString {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".type", ErrUnsupportedChatResponseContent)
+		}
+		var field string
+		switch partType.stringValue {
+		case "text":
+			field = "text"
+		case "refusal":
+			field = "refusal"
+		default:
+			return chatResponseError(ChatResponseUnsupportedContent, base+".type", ErrUnsupportedChatResponseContent)
+		}
+		value := part.object[field]
+		if value == nil || value.kind != jsonString {
+			return chatResponseError(ChatResponseUnsupportedContent, base+"."+field, ErrUnsupportedChatResponseContent)
+		}
+		response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+			ID: len(response.AssistantContents), ChoiceIndex: choiceIndex,
+			JSONPath: base + "." + field, Content: value.stringValue,
+			valueStart: value.start, valueEnd: value.end,
+		})
+	}
+	return nil
 }
 
 // Mutate serializes response-content replacements safely while retaining the
@@ -229,40 +303,40 @@ func (r *ChatResponse) Mutate(mutations []ChatResponseContentMutation) ([]byte, 
 	}
 	targets := make(map[int]ChatAssistantContent, len(r.AssistantContents))
 	for _, target := range r.AssistantContents {
-		targets[target.ChoiceIndex] = target
+		targets[target.ID] = target
 	}
-	replacements := make(map[int][]byte, len(mutations))
+	replacements := make([]sourceReplacement, 0, len(mutations))
+	seen := make(map[int]struct{}, len(mutations))
 	for _, mutation := range mutations {
-		path := fmt.Sprintf(".choices[%d].message.content", mutation.ChoiceIndex)
-		if _, exists := replacements[mutation.ChoiceIndex]; exists {
-			return nil, chatResponseError(ChatResponseInvalidMutation, path, ErrInvalidChatResponseMutation)
+		if _, exists := seen[mutation.ID]; exists {
+			return nil, chatResponseError(ChatResponseInvalidMutation, "", ErrInvalidChatResponseMutation)
 		}
-		if _, found := targets[mutation.ChoiceIndex]; !found {
-			return nil, chatResponseError(ChatResponseInvalidMutation, path, ErrInvalidChatResponseMutation)
+		target, found := targets[mutation.ID]
+		if !found {
+			return nil, chatResponseError(ChatResponseInvalidMutation, "", ErrInvalidChatResponseMutation)
 		}
 		encoded, err := json.Marshal(mutation.Content)
 		if err != nil {
-			return nil, chatResponseError(ChatResponseInvalidMutation, path, fmt.Errorf("%w: %v", ErrInvalidChatResponseMutation, err))
+			return nil, chatResponseError(ChatResponseInvalidMutation, target.JSONPath, fmt.Errorf("%w: %v", ErrInvalidChatResponseMutation, err))
 		}
-		replacements[mutation.ChoiceIndex] = encoded
+		seen[mutation.ID] = struct{}{}
+		replacements = append(replacements, sourceReplacement{start: target.valueStart, end: target.valueEnd, value: encoded})
 	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start < replacements[j].start })
 	result := make([]byte, 0, len(r.body))
 	cursor := 0
-	for _, target := range r.AssistantContents {
-		replacement, changed := replacements[target.ChoiceIndex]
-		if !changed {
-			continue
-		}
-		result = append(result, r.body[cursor:target.valueStart]...)
-		result = append(result, replacement...)
-		cursor = target.valueEnd
+	for _, replacement := range replacements {
+		result = append(result, r.body[cursor:replacement.start]...)
+		result = append(result, replacement.value...)
+		cursor = replacement.end
 	}
 	return append(result, r.body[cursor:]...), nil
 }
 
 // ParseChatRequest accepts only an application/json OpenAI Chat Completions
-// request. It extracts role=user string content fields and preserves enough
-// source offsets to safely rewrite only those JSON string values later.
+// request. It extracts supported string and multimodal text content fields from
+// scanned roles and preserves enough source offsets to safely rewrite only
+// those JSON string values later.
 func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 	if !isJSONContentType(contentType) {
 		return nil, chatRequestError(ChatRequestUnsupportedType, -1, "", ErrUnsupportedChatContentType)
@@ -293,22 +367,175 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 			return nil, chatRequestError(ChatRequestUnsupportedRequest, index, "", ErrUnsupportedChatRequest)
 		}
 		role := message.object["role"]
-		if role == nil || role.kind != jsonString || role.stringValue != "user" {
+		if role == nil || role.kind != jsonString || !isScannedChatRequestRole(role.stringValue) {
+			if message.object["tool_calls"] != nil || message.object["tool_call_id"] != nil || message.object["refusal"] != nil {
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, "", ErrUnsupportedChatContent)
+			}
 			continue
 		}
+		if role.stringValue == "tool" {
+			toolCallID := message.object["tool_call_id"]
+			if toolCallID == nil || toolCallID.kind != jsonString {
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".tool_call_id", ErrUnsupportedChatContent)
+			}
+		}
 		content := message.object["content"]
-		if content == nil || content.kind != jsonString {
+		toolCalls := message.object["tool_calls"]
+		refusal := message.object["refusal"]
+		if toolCalls != nil && role.stringValue != "assistant" {
+			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".tool_calls", ErrUnsupportedChatContent)
+		}
+		hasRefusalContent := false
+		if refusal != nil {
+			if role.stringValue != "assistant" {
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".refusal", ErrUnsupportedChatContent)
+			}
+			switch {
+			case refusal.kind == jsonString:
+				hasRefusalContent = true
+				request.addContent(index, role.stringValue, fmt.Sprintf(".messages[%d].refusal", index), refusal)
+			case !isJSONNull(refusal, body):
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".refusal", ErrUnsupportedChatContent)
+			}
+		}
+		if content != nil && content.kind == jsonString {
+			request.addContent(index, role.stringValue, path, content)
+		} else if content != nil && content.kind == jsonArray {
+			if err := request.appendContentParts(index, role.stringValue, content); err != nil {
+				return nil, err
+			}
+		} else if content != nil && !(role.stringValue == "assistant" && (toolCalls != nil || hasRefusalContent) && isJSONNull(content, body)) {
 			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".content", ErrUnsupportedChatContent)
 		}
-		request.UserContents = append(request.UserContents, ChatUserContent{
-			MessageIndex: index,
-			JSONPath:     path,
-			Content:      content.stringValue,
-			valueStart:   content.start,
-			valueEnd:     content.end,
-		})
+		if role.stringValue == "assistant" && toolCalls != nil {
+			if err := request.appendToolCalls(index, toolCalls); err != nil {
+				return nil, err
+			}
+		}
+		if content == nil && toolCalls == nil && !hasRefusalContent {
+			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".content", ErrUnsupportedChatContent)
+		}
 	}
 	return request, nil
+}
+
+func (r *ChatRequest) appendContentParts(messageIndex int, role string, content *jsonNode) error {
+	if len(content.array) == 0 {
+		return chatRequestError(ChatRequestUnsupportedContent, messageIndex, ".content", ErrUnsupportedChatContent)
+	}
+	for contentIndex, part := range content.array {
+		base := fmt.Sprintf(".messages[%d].content[%d]", messageIndex, contentIndex)
+		if part.kind != jsonObject {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d]", contentIndex), ErrUnsupportedChatContent)
+		}
+		partType := part.object["type"]
+		if partType == nil || partType.kind != jsonString {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d].type", contentIndex), ErrUnsupportedChatContent)
+		}
+		switch partType.stringValue {
+		case "text":
+			text := part.object["text"]
+			if text == nil || text.kind != jsonString {
+				return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d].text", contentIndex), ErrUnsupportedChatContent)
+			}
+			r.addContent(messageIndex, role, base+".text", text)
+		case "refusal":
+			if role != "assistant" {
+				return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d].type", contentIndex), ErrUnsupportedChatContent)
+			}
+			refusal := part.object["refusal"]
+			if refusal == nil || refusal.kind != jsonString {
+				return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d].refusal", contentIndex), ErrUnsupportedChatContent)
+			}
+			r.addContent(messageIndex, role, base+".refusal", refusal)
+		case "image_url", "input_audio", "file":
+			if role != "user" || part.object["text"] != nil || part.object["refusal"] != nil {
+				return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d]", contentIndex), ErrUnsupportedChatContent)
+			}
+		default:
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".content[%d].type", contentIndex), ErrUnsupportedChatContent)
+		}
+	}
+	return nil
+}
+
+func appendChatResponseToolCalls(response *ChatResponse, choiceIndex int, toolCalls *jsonNode) error {
+	if toolCalls.kind != jsonArray {
+		return chatResponseError(ChatResponseUnsupportedContent, fmt.Sprintf(".choices[%d].message.tool_calls", choiceIndex), ErrUnsupportedChatResponseContent)
+	}
+	for toolIndex, toolCall := range toolCalls.array {
+		base := fmt.Sprintf(".choices[%d].message.tool_calls[%d]", choiceIndex, toolIndex)
+		if toolCall.kind != jsonObject {
+			return chatResponseError(ChatResponseUnsupportedContent, base, ErrUnsupportedChatResponseContent)
+		}
+		id, callType := toolCall.object["id"], toolCall.object["type"]
+		if id == nil || id.kind != jsonString {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".id", ErrUnsupportedChatResponseContent)
+		}
+		if callType == nil || callType.kind != jsonString || callType.stringValue != "function" {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".type", ErrUnsupportedChatResponseContent)
+		}
+		function := toolCall.object["function"]
+		if function == nil || function.kind != jsonObject {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".function", ErrUnsupportedChatResponseContent)
+		}
+		name, arguments := function.object["name"], function.object["arguments"]
+		if name == nil || name.kind != jsonString {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".function.name", ErrUnsupportedChatResponseContent)
+		}
+		if arguments == nil || arguments.kind != jsonString {
+			return chatResponseError(ChatResponseUnsupportedContent, base+".function.arguments", ErrUnsupportedChatResponseContent)
+		}
+		response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+			ID: len(response.AssistantContents), ChoiceIndex: choiceIndex,
+			JSONPath: base + ".function.arguments", Content: arguments.stringValue,
+			valueStart: arguments.start, valueEnd: arguments.end,
+		})
+	}
+	return nil
+}
+
+func isScannedChatRequestRole(role string) bool {
+	return role == "developer" || role == "system" || role == "user" || role == "assistant" || role == "tool"
+}
+
+func (r *ChatRequest) addContent(messageIndex int, role, path string, node *jsonNode) {
+	r.Contents = append(r.Contents, ChatRequestContent{
+		ID: len(r.Contents), MessageIndex: messageIndex, Role: role, JSONPath: path,
+		Content: node.stringValue, valueStart: node.start, valueEnd: node.end,
+	})
+}
+
+func (r *ChatRequest) appendToolCalls(messageIndex int, toolCalls *jsonNode) error {
+	if toolCalls.kind != jsonArray {
+		return chatRequestError(ChatRequestUnsupportedContent, messageIndex, ".tool_calls", ErrUnsupportedChatContent)
+	}
+	for toolIndex, toolCall := range toolCalls.array {
+		base := fmt.Sprintf(".messages[%d].tool_calls[%d]", messageIndex, toolIndex)
+		if toolCall.kind != jsonObject {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d]", toolIndex), ErrUnsupportedChatContent)
+		}
+		id, callType := toolCall.object["id"], toolCall.object["type"]
+		if id == nil || id.kind != jsonString {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d].id", toolIndex), ErrUnsupportedChatContent)
+		}
+		if callType == nil || callType.kind != jsonString || callType.stringValue != "function" {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d].type", toolIndex), ErrUnsupportedChatContent)
+		}
+		function := toolCall.object["function"]
+		if function == nil || function.kind != jsonObject {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d].function", toolIndex), ErrUnsupportedChatContent)
+		}
+		name, arguments := function.object["name"], function.object["arguments"]
+		if name == nil || name.kind != jsonString {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d].function.name", toolIndex), ErrUnsupportedChatContent)
+		}
+		if arguments == nil || arguments.kind != jsonString {
+			return chatRequestError(ChatRequestUnsupportedContent, messageIndex, fmt.Sprintf(".tool_calls[%d].function.arguments", toolIndex), ErrUnsupportedChatContent)
+		}
+		r.addContent(messageIndex, "tool_call", base+".function.arguments", arguments)
+	}
+	return nil
 }
 
 // Mutate serializes replacements safely while retaining the exact original
@@ -320,36 +547,40 @@ func (r *ChatRequest) Mutate(mutations []ChatContentMutation) ([]byte, error) {
 	if len(mutations) == 0 {
 		return append([]byte(nil), r.body...), nil
 	}
-	targets := make(map[int]ChatUserContent, len(r.UserContents))
-	for _, target := range r.UserContents {
-		targets[target.MessageIndex] = target
+	targets := make(map[int]ChatRequestContent, len(r.Contents))
+	for _, target := range r.Contents {
+		targets[target.ID] = target
 	}
-	replacements := make(map[int][]byte, len(mutations))
+	replacements := make([]sourceReplacement, 0, len(mutations))
+	seen := make(map[int]struct{}, len(mutations))
 	for _, mutation := range mutations {
-		if _, exists := replacements[mutation.MessageIndex]; exists {
-			return nil, chatRequestError(ChatRequestInvalidMutation, mutation.MessageIndex, ".content", ErrInvalidChatMutation)
+		if _, exists := seen[mutation.ID]; exists {
+			return nil, chatRequestError(ChatRequestInvalidMutation, -1, "", ErrInvalidChatMutation)
 		}
-		if _, found := targets[mutation.MessageIndex]; !found {
-			return nil, chatRequestError(ChatRequestInvalidMutation, mutation.MessageIndex, ".content", ErrInvalidChatMutation)
+		target, found := targets[mutation.ID]
+		if !found {
+			return nil, chatRequestError(ChatRequestInvalidMutation, -1, "", ErrInvalidChatMutation)
 		}
 		encoded, err := json.Marshal(mutation.Content)
 		if err != nil {
-			return nil, chatRequestError(ChatRequestInvalidMutation, mutation.MessageIndex, ".content", fmt.Errorf("%w: %v", ErrInvalidChatMutation, err))
+			return nil, chatRequestError(ChatRequestInvalidMutation, target.MessageIndex, target.JSONPath, fmt.Errorf("%w: %v", ErrInvalidChatMutation, err))
 		}
-		replacements[mutation.MessageIndex] = encoded
+		seen[mutation.ID] = struct{}{}
+		replacements = append(replacements, sourceReplacement{start: target.valueStart, end: target.valueEnd, value: encoded})
 	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start < replacements[j].start })
 	result := make([]byte, 0, len(r.body))
 	cursor := 0
-	for _, target := range r.UserContents {
-		replacement, changed := replacements[target.MessageIndex]
-		if !changed {
-			continue
-		}
-		result = append(result, r.body[cursor:target.valueStart]...)
-		result = append(result, replacement...)
-		cursor = target.valueEnd
+	for _, replacement := range replacements {
+		result = append(result, r.body[cursor:replacement.start]...)
+		result = append(result, replacement.value...)
+		cursor = replacement.end
 	}
 	return append(result, r.body[cursor:]...), nil
+}
+
+func isJSONNull(node *jsonNode, body []byte) bool {
+	return node != nil && node.start >= 0 && node.end <= len(body) && string(body[node.start:node.end]) == "null"
 }
 
 func isJSONContentType(contentType string) bool {
@@ -372,12 +603,13 @@ const (
 )
 
 type jsonNode struct {
-	kind        jsonNodeKind
-	start, end  int
-	stringValue string
-	boolean     bool
-	object      map[string]*jsonNode
-	array       []*jsonNode
+	kind          jsonNodeKind
+	start, end    int
+	stringValue   string
+	boolean       bool
+	object        map[string]*jsonNode
+	duplicateKeys bool
+	array         []*jsonNode
 }
 
 // jsonSourceParser validates JSON while retaining byte offsets. It is limited
@@ -446,6 +678,9 @@ func (p *jsonSourceParser) parseObject() (*jsonNode, error) {
 		value, err := p.parseValue()
 		if err != nil {
 			return nil, err
+		}
+		if _, exists := node.object[key.stringValue]; exists {
+			node.duplicateKeys = true
 		}
 		node.object[key.stringValue] = value
 		p.skipSpace()

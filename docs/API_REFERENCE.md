@@ -298,13 +298,13 @@ TSZ implements the **request and response shape** of the OpenAI `chat/completion
    - `model`: any model name (forwarded as‑is to upstream)
    - `messages`: array of chat messages
    - `stream`: `false` (standard JSON response) or `true` (SSE streaming)
-2. TSZ runs `/detect` logic on **user messages** (`role == "user"`) before calling the LLM:
+2. TSZ runs `/detect` logic on **developer, system, user, assistant, and tool-result messages**, including assistant refusals and tool-call arguments, before calling the LLM:
    - PII & secret detection
    - Guardrails / validators (e.g. `TOXIC_LANGUAGE`)
 3. If unsafe on input:
    - TSZ **blocks** the request and returns an OpenAI‑compatible error response.
 4. If safe on input:
-   - TSZ **redacts** sensitive content in user messages and forwards the sanitized request to the upstream LLM service.
+   - TSZ **redacts** sensitive message content, tool-call arguments, and tool results before forwarding the sanitized request.
 5. For non‑streaming responses (`stream=false`):
    - TSZ runs `/detect` on the assistant output (using the same guardrails).
    - If unsafe, TSZ returns an OpenAI‑compatible error and does not forward the raw LLM response.
@@ -578,14 +578,14 @@ for chunk in stream:
 
 TSZ will:
 
-- Inspect and redact the user content.
+- Inspect and redact developer, system, user, assistant, tool-call, and tool-result content.
 - Forward the sanitized request to the configured upstream LLM service.
 - For non‑streaming calls, apply output guardrails to the full assistant message before returning.
 - For streaming calls, behave according to the chosen `X-TSZ-Guardrails-Mode` and `X-TSZ-Guardrails-OnFail`.
 
 Current limitations:
 
-- Only `role == "user"` messages are scanned and redacted on input (system/assistant messages are left as‑is).
+- String content in `role == "developer"`, `role == "system"`, `role == "user"`, `role == "assistant"`, and `role == "tool"` messages is scanned and redacted on input. Assistant refusal content and `tool_calls[].function.arguments` strings are also scanned.
 - Streaming support is focused on **textual content** in `choices[].delta.content`.
 
 #### 3.2.6 Gateway Metadata (`tsz_meta`)
@@ -691,29 +691,147 @@ The checked-in reference environment supports Envoy Gateway **v1.8.3** and
 Gateway API **v1.5.1**. Installation and profile selection are documented in
 [the Envoy Gateway integration guide](integrations/ENVOY_GATEWAY.md).
 
+#### Kubernetes policy API versions
+
+New native policy manifests use `apiVersion: security.thyris.ai/v1beta1` and
+`kind: TSZGuardrailPolicy`. The beta controller uses this API version;
+`v1alpha1` remains served with a deprecation warning for existing clients.
+Both versions expose identical spec/status schemas, defaults and validation,
+while all new writes are stored as `v1beta1`. This version is independent of
+Envoy's API version and of immutable TSZ policy snapshot versions.
+
+Install the dual-version CRD before upgrading the controller. Existing policy
+manifests need only an `apiVersion` change. See the
+[policy API upgrade guide](operations/TSZ_POLICY_API_UPGRADE.md) for compatibility
+evidence, storage migration, supported rollback and the remaining GA feedback gates.
+
+#### Native gateway adapter selector
+
+`TSZGuardrailPolicy.spec.adapter` selects an installed native adapter. It defaults
+to `envoy-gateway`, accepts a DNS-label name up to 63 characters, and is immutable.
+Both served API versions expose the same field. The shipped controller registers
+only `envoy-gateway`; other names report `Accepted=False` and `Programmed=False`
+with reason `UnsupportedCapability`. Requested actions and target/section scopes
+must be supported by that adapter, including actions in referenced snapshots.
+Existing native resources remain unchanged when a new generation is rejected.
+See [native adapter selection](integrations/NATIVE_GATEWAY_ADAPTERS.md) for the
+extension boundary, compatibility and Phase 7 scope.
+
 #### Response contract
 
-For a strict no-leakage guarantee, use this buffered, non-streaming OpenAI
-Chat Completions profile. The request must use `Content-Type: application/json`;
-streaming requests and unsupported content shapes are processing failures, not
-silently allowed content. The separate Envoy BYG `Windowed` SSE mode is
-best-effort only: it cannot retract content that Envoy has already sent and is
-not a strict-streaming substitute.
+For a strict no-leakage guarantee, use supported buffered, non-streaming OpenAI,
+Anthropic Messages, or Gemini GenerateContent traffic. The request must use
+`Content-Type: application/json`; unsupported content shapes are processing
+failures, not silently allowed content. The separate Envoy BYG `Windowed` SSE
+mode currently understands Chat Completions events only and is best-effort: it
+cannot retract content that Envoy has already sent.
 
-On the response path TSZ reads every string value at
-`choices[].message.content` where `message.role` is `assistant`. It changes
-only those values; choice order and all other JSON fields are preserved.
+The supported non-streaming content fields are:
+
+| API | Request fields | Response fields |
+| --- | --- | --- |
+| Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for developer/system/user/assistant/tool messages, assistant top-level and content-part `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant top-level and content-part `refusal` fields, and `choices[].message.tool_calls[].function.arguments` |
+| Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported developer/system/user/assistant message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
+| Embeddings (OpenAI-compatible) | Non-empty string `input` or non-empty array of non-empty strings; every item is inspected independently | Input-only: vectors, usage and provider errors pass through unchanged |
+| MCP Streamable HTTP | `prompts/get` string arguments and `tools/call` JSON-object arguments | Prompt text and embedded text resources; tool-result text, embedded text resources and `structuredContent` objects |
+| Anthropic Messages | Top-level string or text-block `system`; user/assistant string and text-block content; `tool_use.input`; string or text-block `tool_result.content` | Assistant text blocks and `tool_use.input` |
+| Gemini GenerateContent | `systemInstruction` and `contents[].parts[].text`; `functionCall.args`, `functionResponse.response`, server `toolCall.args`/`toolResponse.response`, executable code and execution output | The corresponding supported fields in `candidates[].content.parts[]` |
+
+TSZ changes only the extracted text string values and the derived Responses
+API `output_text` value; item order, unknown fields and untouched JSON bytes
+are preserved. Tool names and execution authorization are not changed. Tool
+payloads in streaming events, the bytes or meaning of multimodal image/audio/file
+data, and Responses, Anthropic, or Gemini streaming events are not covered by
+this capability yet. Anthropic requests are selected using the required
+`anthropic-version` header; Gemini requests are selected by their
+`contents`/`systemInstruction` shape.
 
 | Policy action | Envoy result |
 | --- | --- |
 | `ALLOW` | Continue without changing the body. |
 | `AUDIT_ONLY` | Continue without changing the body. |
-| `MASK` | Replace only the unsafe assistant-content strings and update `content-length`. |
+| `MASK` | Replace unsafe supported content fields and update `content-length`. |
 | `BLOCK` | Replace the upstream response with a safe local `403` response. |
 
-This scope does **not** guarantee streaming response enforcement. Configure
-both request and response bodies as `Buffered`; do not attach this profile to
-a route that requires an unbuffered or SSE safety guarantee.
+This scope does **not** guarantee Responses, Anthropic, Gemini, or MCP streaming enforcement.
+Configure both request and response bodies as `Buffered`; do not attach this
+profile to a route that requires an unbuffered or Responses SSE safety
+guarantee.
+
+#### Embeddings input guardrails
+
+The BYG processor supports OpenAI-compatible `/v1/embeddings` and `/embeddings`
+request paths (including query strings). Envoy must forward the `:path` request
+header to ext_proc; other adapters must populate `ProcessingRequest.RequestPath`.
+The request path is retained for response processing and is never taken from
+response headers. Custom public paths must be rewritten to a supported path
+before TSZ inspection. Endpoint selection is necessary because Responses API
+requests also use `input`; model names are not used to guess the API.
+
+Each text input runs through the same pinned request policy as chat content:
+PII, secrets, custom patterns, allowlists, blocklists and configured validators.
+`ALLOW` and `AUDIT_ONLY` preserve the body; `MASK` replaces affected input strings
+and corrects `content-length`; a `BLOCK` in any item blocks the entire request.
+Array order, model, dimensions, encoding format and unrelated fields are preserved.
+Audit metadata uses adapter `openai_embeddings` and contains no input text.
+
+Example request through the protected gateway:
+
+```json
+{"model":"text-embedding-3-small","input":["ordinary text","contact alice@example.com"]}
+```
+
+With a PII masking policy, only the email in the second input is redacted before
+upstream delivery. A secret configured to block in any input prevents the whole
+request from reaching the provider. Validate this with the local mock provider
+and the existing route-owned policy setup.
+
+The [OpenAI embeddings API](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
+also accepts token ID arrays. TSZ currently supports **text inputs only**: token
+ID arrays, mixed arrays, empty inputs and malformed JSON produce processing
+errors under the configured failure policy. Use `fail-closed` for enforcement;
+`fail-open` can forward uninspected inputs on an error. Token decoding and
+provider/model token-limit validation are not implemented by this adapter.
+Embedding responses are outside content inspection, including when response
+policies are enabled. This feature adds BYG inspection, not a standalone TSZ
+`POST /v1/embeddings` proxy endpoint. Use buffered processing.
+
+#### MCP prompt and tool-payload guardrails
+
+The BYG processor supports individual, buffered MCP JSON-RPC 2.0 messages over
+Streamable HTTP using the MCP **2025-06-18** content shapes. It identifies MCP
+from the top-level `jsonrpc: "2.0"` field, so the public MCP endpoint may use any
+path. The Envoy adapter retains the request method to interpret the matching
+JSON-RPC response safely; response bodies cannot select their own method. The
+following content is inspected with the policy snapshot pinned to the request:
+
+- `prompts/get` request `params.arguments` string map
+- `tools/call` request `params.arguments` JSON object
+- `prompts/get` response message `content.text` and embedded
+  `content.resource.text`
+- `tools/call` response `content[].text`, embedded resource text and
+  `structuredContent` JSON object, including results with `isError: true`
+
+`ALLOW` and `AUDIT_ONLY` preserve the original body. `MASK` changes only the
+extracted fields and updates `content-length`. A request-side `BLOCK` prevents
+the MCP server call; a response-side `BLOCK` prevents the result from reaching
+the client. Metadata uses adapter `mcp_jsonrpc` and never includes arguments,
+prompt text, tool results or raw detections.
+
+Tool and prompt names, JSON-RPC IDs, annotations and unrelated fields remain
+unchanged. Image, audio and embedded-resource blob bytes are preserved without
+inspection. Resource links are preserved. Unknown content variants, malformed
+covered payloads, duplicate JSON keys and mutations that would make a structured
+object invalid are processing errors and follow the configured failure policy.
+MCP initialization, discovery, notifications and protocol-error responses pass
+through because they do not contain prompt or tool payloads covered here.
+
+This adapter performs content guardrails only. It does not authorize tool
+execution, decide which MCP server or tool may be used, validate tool schemas,
+or enforce MCP authentication and `Origin` checks; those controls remain with
+the gateway and MCP client/server. Configure both request and response bodies as
+`Buffered`. MCP SSE messages, stdio transport, JSON-RPC batching, resource-read
+payloads and binary content inspection are outside this capability.
 
 #### Envoy attachment and runtime settings
 

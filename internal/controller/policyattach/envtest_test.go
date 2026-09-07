@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/controller"
 	"thyris-sz/internal/controller/effectivepolicy"
 
@@ -53,9 +53,9 @@ func TestEnvtestReconcilerPublishesReferenceFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := int32(1)
-	object := &securityv1alpha1.TSZGuardrailPolicy{
+	object := &securityv1beta1.TSZGuardrailPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "missing-reference", Namespace: "default"},
-		Spec: securityv1alpha1.TSZGuardrailPolicySpec{
+		Spec: securityv1beta1.TSZGuardrailPolicySpec{
 			TargetRefs: []gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{
 				gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName(gatewayv1.LocalPolicyTargetReferenceWithSectionName{
 					LocalPolicyTargetReference: gatewayv1.LocalPolicyTargetReference{
@@ -63,10 +63,10 @@ func TestEnvtestReconcilerPublishesReferenceFailure(t *testing.T) {
 					},
 				}),
 			},
-			PolicySource: securityv1alpha1.PolicySourcePostgresRef,
-			PolicyRef:    &securityv1alpha1.PolicyReference{Name: "does-not-exist", Version: &version},
-			FailurePolicy: securityv1alpha1.FailurePolicySpec{
-				Request: securityv1alpha1.FailureModeClosed, Response: securityv1alpha1.FailureModeClosed,
+			PolicySource: securityv1beta1.PolicySourcePostgresRef,
+			PolicyRef:    &securityv1beta1.PolicyReference{Name: "does-not-exist", Version: &version},
+			FailurePolicy: securityv1beta1.FailurePolicySpec{
+				Request: securityv1beta1.FailureModeClosed, Response: securityv1beta1.FailureModeClosed,
 			},
 		},
 	}
@@ -74,7 +74,7 @@ func TestEnvtestReconcilerPublishesReferenceFailure(t *testing.T) {
 		t.Fatalf("create TSZGuardrailPolicy: %v", err)
 	}
 
-	reconciler := NewPolicyAttachmentReconciler(kubeClient, staticTargets{}, selector{}, missingReferenceResolver(), nil, &recordingEnvoy{})
+	reconciler := NewPolicyAttachmentReconciler(kubeClient, staticTargets{}, selector{}, missingReferenceResolver(), nil, testRegistry(t, &recordingEnvoy{}))
 	if _, err := reconciler.Reconcile(context.Background(), request(object)); err == nil {
 		t.Fatal("Reconcile() unexpectedly succeeded for a missing policy reference")
 	}
@@ -82,12 +82,12 @@ func TestEnvtestReconcilerPublishesReferenceFailure(t *testing.T) {
 	key := client.ObjectKeyFromObject(object)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := &securityv1alpha1.TSZGuardrailPolicy{}
+		got := &securityv1beta1.TSZGuardrailPolicy{}
 		if err := kubeClient.Get(context.Background(), key, got); err != nil {
 			t.Fatal(err)
 		}
-		condition := findCondition(got.Status.Conditions, securityv1alpha1.ConditionResolvedRefs)
-		if condition.Status == metav1.ConditionFalse && condition.Reason == securityv1alpha1.ReasonPolicyNotFound {
+		condition := findCondition(got.Status.Conditions, securityv1beta1.ConditionResolvedRefs)
+		if condition.Status == metav1.ConditionFalse && condition.Reason == securityv1beta1.ReasonPolicyNotFound {
 			return
 		}
 		if time.Now().After(deadline) {

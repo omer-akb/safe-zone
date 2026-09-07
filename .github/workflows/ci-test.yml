@@ -9,6 +9,29 @@ on:
       - main
 
 jobs:
+  policy-api-compatibility:
+    name: Policy API compatibility and storage upgrade
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Verify generated API assets
+        run: |
+          make generate manifests
+          git diff --exit-code -- api config/crd config/rbac
+
+      - name: Test API schema and controller behavior
+        run: go test ./api/... ./internal/controller/...
+
+      - name: Test alpha-to-beta CRD upgrade with Kubernetes API server
+        run: make test-envtest
+
   unit-tests:
     name: Unit tests (fast)
     runs-on: ubuntu-latest
