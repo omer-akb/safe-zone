@@ -252,6 +252,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
   - [ ] Envoy access logs consuming PII-safe `io.thyris.tsz` dynamic metadata
 - [ ] Require every example to be CI-verifiable, free of real credentials, version-pinned where necessary and accompanied by sample safe/unsafe requests
 - [x] Select Kong Gateway + KIC provisionally as the next non-Envoy adapter based on the documented demand proxy, subject to customer-validation and compatibility gates in `docs/integrations/NEXT_GATEWAY_DECISION.md`
+- [x] Evaluate Kong, APISIX, NGINX, Traefik, Istio and managed cloud adapter paths, limitations and required compatibility spikes (`docs/integrations/GATEWAY_ADAPTER_EVALUATION.md`)
 
 ---
 

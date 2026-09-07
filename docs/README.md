@@ -51,6 +51,9 @@ The documentation set is organized as follows:
 - **Next Gateway Decision** – Demand evidence, provisional Kong selection and validation gates
   [integrations/NEXT_GATEWAY_DECISION.md](integrations/NEXT_GATEWAY_DECISION.md)
 
+- **Gateway Adapter Evaluation** – Technical feasibility and disposition for self-managed and managed gateway candidates
+  [integrations/GATEWAY_ADAPTER_EVALUATION.md](integrations/GATEWAY_ADAPTER_EVALUATION.md)
+
 - **TSZ Policy API Upgrade** – Beta API compatibility, alpha migration, storage rewrite and adopter-feedback gates
   [operations/TSZ_POLICY_API_UPGRADE.md](operations/TSZ_POLICY_API_UPGRADE.md)
 

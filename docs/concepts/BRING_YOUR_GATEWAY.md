@@ -33,6 +33,10 @@ Contributors adding another gateway must also follow the normative
 The evidence, alternatives, and go/no-go criteria for the provisional Kong
 selection are in the
 [next gateway decision](../integrations/NEXT_GATEWAY_DECISION.md).
+The broader
+[gateway adapter evaluation](../integrations/GATEWAY_ADAPTER_EVALUATION.md)
+records the technical disposition and required spikes for Kong, APISIX, NGINX,
+Traefik, Istio, and managed cloud products without claiming support.
 
 ## MVP compatibility decision
 

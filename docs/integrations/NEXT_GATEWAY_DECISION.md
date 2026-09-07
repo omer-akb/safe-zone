@@ -8,6 +8,8 @@ Kong Gateway is the next non-Envoy gateway selected for BYG validation. This
 does not mean that a Kong adapter exists, is conformant, or is supported. The
 decision authorizes customer discovery and a bounded compatibility spike; the
 validation gates below control implementation and any support claim.
+The full technical comparison is maintained in the
+[gateway adapter evaluation](GATEWAY_ADAPTER_EVALUATION.md).
 
 ## Demand evidence and limitations
 
@@ -71,9 +73,9 @@ failure behavior must be tested explicitly.
 | Apache APISIX | **Fallback** | Its official [external plugin runner](https://apisix.apache.org/docs/apisix/external-plugin/) offers a strong Go integration path. Reconsider if Kong cannot meet response or lifecycle requirements. |
 | Traefik | **Shortlisted** | Collect direct TSZ demand and validate a stable request/response extension surface. |
 | Istio | **Reuse investigation** | Determine whether the existing Envoy transport can be attached safely before creating another adapter. |
-| NGINX Gateway Fabric | **Shortlisted** | Its [custom-policy model](https://docs.nginx.com/nginx-gateway-fabric/overview/custom-policies/) aligns with Gateway API attachment; separate open-source and commercial capabilities during evaluation. |
+| NGINX Gateway Fabric | **Parallel compatibility probe** | Its experimental [`PayloadProcessor`](https://docs.nginx.com/nginx-gateway-fabric/how-to/f5-ai-guardrails/) directly offloads request/response payloads; prove TSZ protocol, masking, metadata and failure semantics. |
 | Envoy AI Gateway | **Existing-adapter compatibility track** | Validate filter ordering, transformations, routing/fallback, token metadata, and versions with the Envoy adapter. |
-| Managed cloud gateways | **Deferred** | Select only after a named deployment model and verified customer requirement exist. |
+| Managed cloud gateways | **Demand-gated** | Evaluate the named product and tier; Azure APIM leads the technical shortlist, followed by Apigee. AWS and Google Cloud API Gateway require a chained proxy for strict enforcement. |
 
 ## Validation gates
 

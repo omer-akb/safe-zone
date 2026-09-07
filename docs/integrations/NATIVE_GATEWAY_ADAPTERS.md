@@ -13,6 +13,8 @@ Kong Gateway + KIC is the [provisional next adapter candidate](NEXT_GATEWAY_DECI
 Its data-plane transport, compatibility testing, conformance suite and runnable
 integration guide remain Phase 7 work; the shipped binary still registers no
 Kong implementation.
+See the [gateway adapter evaluation](GATEWAY_ADAPTER_EVALUATION.md) for the
+candidate-specific transport, control-plane, capability, and risk assessment.
 
 ## Policy selection and compatibility
 
