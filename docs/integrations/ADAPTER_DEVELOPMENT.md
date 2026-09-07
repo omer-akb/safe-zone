@@ -316,6 +316,23 @@ Pin version-sensitive dependencies and include smoke tests in CI where
 practical. Add all guides to the [documentation index](../README.md) and run the
 documentation link checker.
 
+Every data-plane adapter package matching `internal/extproc/<gateway>/adapter.go`
+must also have an entry in
+[`adapter-releases.json`](../../examples/bring-your-gateway/adapter-releases.json).
+The entry binds the implementation to its maturity, indexed integration guide,
+example-set guide, smoke command, and runnable safe, request-mask,
+request-block, response-mask, response-block, fail-open, fail-closed, and
+telemetry directories. Each directory needs `README.md`, `policy.json`,
+`request.json`, and `expected-status`; a custom runner may add gateway-specific
+resources without weakening the shared assertions.
+
+`go test ./tests/release` is the mechanical release gate. It discovers adapter
+packages rather than trusting the manifest alone, rejects missing or stale
+entries, validates the complete scenario set and focused files, and verifies
+that the integration guide is present in the documentation index. Add the
+manifest entry in the same change as a new adapter; an adapter without its
+guide and runnable example contract cannot pass CI.
+
 An adapter is ready for review only when its declared capabilities match its
 tests and guide, unsupported policies fail closed at admission/reconciliation,
 gateway-specific dependencies remain isolated, and the shared guardrail engine

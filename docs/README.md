@@ -42,6 +42,9 @@ The documentation set is organized as follows:
 - **Envoy Gateway Integration** – Preview/manual and native/managed installation profiles
   `integrations/ENVOY_GATEWAY.md`
 
+- **Envoy Gateway Runnable Examples** – Local mock-provider verification for safe, masking, blocking, failure and telemetry paths
+  [examples/bring-your-gateway/README.md](../examples/bring-your-gateway/README.md)
+
 - **Native Gateway Adapters** – Adapter selection, capabilities and controller extension scope
   [integrations/NATIVE_GATEWAY_ADAPTERS.md](integrations/NATIVE_GATEWAY_ADAPTERS.md)
 
