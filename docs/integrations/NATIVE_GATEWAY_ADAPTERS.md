@@ -68,6 +68,21 @@ section support before compilation or native resource writes. For `PostgresRef`,
 it checks the resolved immutable snapshot so actions behind a reference cannot
 bypass capability validation. Existing Windowed/BLOCK restrictions remain.
 
+Capability selection is an in-process negotiation between policy requirements
+and the selected adapter's trusted, versioned descriptor. The controller first
+negotiates the visible attachment spec, then repeats negotiation against the
+fully resolved immutable policy definition before activation. The result names
+the adapter/version and the complete ordered requirement set; a rejection lists
+all missing capabilities so status is actionable. A successful result is passed
+to the native adapter with the validated effective attachment settings. Because
+adapters are compiled into the same controller and registry, there is no network
+discovery handshake or client-supplied capability advertisement.
+
+Adapter declarations are validated at registration. Unknown streaming modes and
+impossible combinations such as body mutation without body inspection prevent
+the controller from starting with that adapter. This keeps capability failures
+deterministic and prevents a malformed declaration from weakening admission.
+
 An unsupported name, target scope or enforcement requirement reports
 `Accepted=False` and `Programmed=False`, reason `UnsupportedCapability`, with
 the observed generation. Existing resources remain intact on this rejection;
