@@ -16,9 +16,9 @@ func (fn inspectFunc) Inspect(ctx context.Context, input guardrails.InspectInput
 	return fn(ctx, input)
 }
 
-func TestOpenAIRequestProcessorMasksSystemUserAndAssistantContentAndUpdatesLength(t *testing.T) {
+func TestOpenAIRequestProcessorMasksDeveloperSystemUserAndAssistantContentAndUpdatesLength(t *testing.T) {
 	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
-		if input.Text == "secret user value" || input.Text == "secret system value" || input.Text == "secret assistant value" {
+		if input.Text == "secret user value" || input.Text == "secret developer value" || input.Text == "secret system value" || input.Text == "secret assistant refusal" || input.Text == "secret assistant value" {
 			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", DetectionCount: 1, Categories: []string{"PII"}}, nil
 		}
 		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
@@ -26,7 +26,7 @@ func TestOpenAIRequestProcessorMasksSystemUserAndAssistantContentAndUpdatesLengt
 	if err != nil {
 		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
 	}
-	body := []byte(`{"model":"kept","unknown":{"x":1},"messages":[{"role":"system","content":"secret system value"},{"role":"user","content":"secret user value"},{"role":"assistant","content":"secret assistant value"},{"role":"user","content":"safe user value"}]}`)
+	body := []byte(`{"model":"kept","unknown":{"x":1},"messages":[{"role":"developer","content":"secret developer value"},{"role":"system","content":"secret system value"},{"role":"user","content":"secret user value"},{"role":"assistant","content":"secret assistant value","refusal":"secret assistant refusal"},{"role":"user","content":"safe user value"}]}`)
 	result, err := processor.Process(context.Background(), ProcessingRequest{
 		RID: "rid-mask", EnvoyReqID: "envoy-mask", Stage: StageRequest, ContentType: "application/json", Body: body,
 		PolicyID: "default", PolicyVersion: 3, PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 3, Definition: requestPolicyDefinition()},
@@ -34,10 +34,10 @@ func TestOpenAIRequestProcessorMasksSystemUserAndAssistantContentAndUpdatesLengt
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
-	if result.Action != ActionMask || result.DetectionCount != 3 || string(result.Body) == string(body) {
+	if result.Action != ActionMask || result.DetectionCount != 5 || string(result.Body) == string(body) {
 		t.Fatalf("result = %+v", result)
 	}
-	want := `{"model":"kept","unknown":{"x":1},"messages":[{"role":"system","content":"[MASKED]"},{"role":"user","content":"[MASKED]"},{"role":"assistant","content":"[MASKED]"},{"role":"user","content":"safe user value"}]}`
+	want := `{"model":"kept","unknown":{"x":1},"messages":[{"role":"developer","content":"[MASKED]"},{"role":"system","content":"[MASKED]"},{"role":"user","content":"[MASKED]"},{"role":"assistant","content":"[MASKED]","refusal":"[MASKED]"},{"role":"user","content":"safe user value"}]}`
 	if got := string(result.Body); got != want {
 		t.Fatalf("mutated body = %s\nwant = %s", got, want)
 	}

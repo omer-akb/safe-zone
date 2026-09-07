@@ -208,6 +208,25 @@ func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
 		}
 		content := message.object["content"]
 		toolCalls := message.object["tool_calls"]
+		refusal := message.object["refusal"]
+		hasRefusalContent := false
+		if refusal != nil {
+			refusalPath := fmt.Sprintf(".choices[%d].message.refusal", index)
+			switch {
+			case refusal.kind == jsonString:
+				hasRefusalContent = true
+				response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
+					ID:          len(response.AssistantContents),
+					ChoiceIndex: index,
+					JSONPath:    refusalPath,
+					Content:     refusal.stringValue,
+					valueStart:  refusal.start,
+					valueEnd:    refusal.end,
+				})
+			case !isJSONNull(refusal, body):
+				return nil, chatResponseError(ChatResponseUnsupportedContent, refusalPath, ErrUnsupportedChatResponseContent)
+			}
+		}
 		if content != nil && content.kind == jsonString {
 			response.AssistantContents = append(response.AssistantContents, ChatAssistantContent{
 				ID:          len(response.AssistantContents),
@@ -221,7 +240,7 @@ func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
 			if err := appendChatResponseContentParts(response, index, content); err != nil {
 				return nil, err
 			}
-		} else if content != nil && !(toolCalls != nil && isJSONNull(content, body)) {
+		} else if content != nil && !((toolCalls != nil || hasRefusalContent) && isJSONNull(content, body)) {
 			return nil, chatResponseError(ChatResponseUnsupportedContent, path, ErrUnsupportedChatResponseContent)
 		}
 		if toolCalls != nil {
@@ -229,7 +248,7 @@ func ParseChatResponse(contentType string, body []byte) (*ChatResponse, error) {
 				return nil, err
 			}
 		}
-		if content == nil && toolCalls == nil {
+		if content == nil && toolCalls == nil && !hasRefusalContent {
 			return nil, chatResponseError(ChatResponseUnsupportedContent, path, ErrUnsupportedChatResponseContent)
 		}
 	}
@@ -349,7 +368,7 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 		}
 		role := message.object["role"]
 		if role == nil || role.kind != jsonString || !isScannedChatRequestRole(role.stringValue) {
-			if message.object["tool_calls"] != nil || message.object["tool_call_id"] != nil {
+			if message.object["tool_calls"] != nil || message.object["tool_call_id"] != nil || message.object["refusal"] != nil {
 				return nil, chatRequestError(ChatRequestUnsupportedContent, index, "", ErrUnsupportedChatContent)
 			}
 			continue
@@ -362,8 +381,22 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 		}
 		content := message.object["content"]
 		toolCalls := message.object["tool_calls"]
+		refusal := message.object["refusal"]
 		if toolCalls != nil && role.stringValue != "assistant" {
 			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".tool_calls", ErrUnsupportedChatContent)
+		}
+		hasRefusalContent := false
+		if refusal != nil {
+			if role.stringValue != "assistant" {
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".refusal", ErrUnsupportedChatContent)
+			}
+			switch {
+			case refusal.kind == jsonString:
+				hasRefusalContent = true
+				request.addContent(index, role.stringValue, fmt.Sprintf(".messages[%d].refusal", index), refusal)
+			case !isJSONNull(refusal, body):
+				return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".refusal", ErrUnsupportedChatContent)
+			}
 		}
 		if content != nil && content.kind == jsonString {
 			request.addContent(index, role.stringValue, path, content)
@@ -371,7 +404,7 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 			if err := request.appendContentParts(index, role.stringValue, content); err != nil {
 				return nil, err
 			}
-		} else if content != nil && !(role.stringValue == "assistant" && toolCalls != nil && isJSONNull(content, body)) {
+		} else if content != nil && !(role.stringValue == "assistant" && (toolCalls != nil || hasRefusalContent) && isJSONNull(content, body)) {
 			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".content", ErrUnsupportedChatContent)
 		}
 		if role.stringValue == "assistant" && toolCalls != nil {
@@ -379,7 +412,7 @@ func ParseChatRequest(contentType string, body []byte) (*ChatRequest, error) {
 				return nil, err
 			}
 		}
-		if content == nil && toolCalls == nil {
+		if content == nil && toolCalls == nil && !hasRefusalContent {
 			return nil, chatRequestError(ChatRequestUnsupportedContent, index, ".content", ErrUnsupportedChatContent)
 		}
 	}
@@ -463,7 +496,7 @@ func appendChatResponseToolCalls(response *ChatResponse, choiceIndex int, toolCa
 }
 
 func isScannedChatRequestRole(role string) bool {
-	return role == "system" || role == "user" || role == "assistant" || role == "tool"
+	return role == "developer" || role == "system" || role == "user" || role == "assistant" || role == "tool"
 }
 
 func (r *ChatRequest) addContent(messageIndex int, role, path string, node *jsonNode) {

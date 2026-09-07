@@ -246,7 +246,7 @@ func (r *ResponsesRequest) addFunctionCall(path string, item *jsonNode) error {
 }
 
 func isScannedResponsesRequestRole(role string) bool {
-	return role == "system" || role == "user" || role == "assistant"
+	return role == "developer" || role == "system" || role == "user" || role == "assistant"
 }
 
 func (r *ResponsesRequest) addContent(role, path string, node *jsonNode) {
@@ -262,9 +262,9 @@ func (r *ResponsesRequest) Mutate(mutations []ResponsesContentMutation) ([]byte,
 	return mutateResponsesContents(r.body, r.Contents, mutations, nil)
 }
 
-// ResponsesResponse represents assistant output_text blocks and function-call
-// arguments in a buffered Responses API response. Tool outputs arrive in a
-// subsequent request; refusals and streaming events are not inspected here.
+// ResponsesResponse represents assistant output_text and refusal blocks plus
+// function-call arguments in a buffered Responses API response. Tool outputs
+// arrive in a subsequent request; streaming events are inspected separately.
 type ResponsesResponse struct {
 	Contents   []ResponsesTextContent
 	body       []byte

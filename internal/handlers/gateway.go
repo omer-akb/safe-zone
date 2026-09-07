@@ -245,7 +245,27 @@ func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailServi
 				break
 			}
 		}
-		if role == "user" || role == "system" || role == "assistant" || role == "tool" {
+		if role == "user" || role == "developer" || role == "system" || role == "assistant" || role == "tool" {
+			refusalContent := false
+			if rawRefusal, present := msgMap["refusal"]; present {
+				if role != "assistant" {
+					blocked, blockMessage = true, "Unsupported message refusal payload"
+					break
+				}
+				switch refusal := rawRefusal.(type) {
+				case string:
+					refusalContent = true
+					if !inspect(refusal, func(value string) { msgMap["refusal"] = value }) {
+						break
+					}
+				case nil:
+				default:
+					blocked, blockMessage = true, "Unsupported message refusal payload"
+				}
+				if blocked {
+					break
+				}
+			}
 			switch content := msgMap["content"].(type) {
 			case string:
 				if !inspect(content, func(value string) { msgMap["content"] = value }) {
@@ -293,7 +313,7 @@ func applyInputGuardrails(ctx context.Context, service guardrails.GuardrailServi
 					break
 				}
 			case nil:
-				if role != "assistant" || msgMap["tool_calls"] == nil {
+				if role != "assistant" || (msgMap["tool_calls"] == nil && !refusalContent) {
 					blocked, blockMessage = true, "Unsupported message content payload"
 				}
 			default:
@@ -388,6 +408,18 @@ func processNonStreamResponse(ctx context.Context, service guardrails.GuardrailS
 					apply func(string)
 				}
 				var targets []outputTarget
+				refusalContent := false
+				if rawRefusal, present := msg["refusal"]; present {
+					switch refusal := rawRefusal.(type) {
+					case string:
+						refusalContent = true
+						targets = append(targets, outputTarget{text: refusal, apply: func(value string) { msg["refusal"] = value }})
+					case nil:
+					default:
+						writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream message refusal payload", "guardrail_error")
+						return
+					}
+				}
 				switch content := msg["content"].(type) {
 				case string:
 					if content != "" {
@@ -418,7 +450,7 @@ func processNonStreamResponse(ctx context.Context, service guardrails.GuardrailS
 						targets = append(targets, outputTarget{text: text, apply: func(value string) { targetPart[targetField] = value }})
 					}
 				case nil:
-					if msg["tool_calls"] == nil {
+					if msg["tool_calls"] == nil && !refusalContent {
 						writeOpenAIError(w, http.StatusInternalServerError, "Unsupported upstream message content payload", "guardrail_error")
 						return
 					}

@@ -22,10 +22,13 @@ require (
 	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.30.0
 	gorm.io/plugin/opentelemetry v0.1.16
+	k8s.io/api v0.36.3
+	k8s.io/apiextensions-apiserver v0.36.2
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/gateway-api v1.5.1
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -97,15 +100,12 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gorm.io/driver/clickhouse v0.7.0 // indirect
 	gorm.io/driver/mysql v1.5.7 // indirect
-	k8s.io/api v0.36.3 // indirect
-	k8s.io/apiextensions-apiserver v0.36.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260706235625-cdb1db5517a0 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
 require (

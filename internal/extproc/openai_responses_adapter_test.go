@@ -10,9 +10,10 @@ func TestParseResponsesRequestExtractsMessagesAndToolResults(t *testing.T) {
 	body := []byte(`{
   "model": "gpt-test",
   "instructions": "top-level system instructions",
-  "input": [
-    {"role":"system","content":"system message"},
-    {"type":"message","role":"user","content":"plain user text"},
+	"input": [
+		{"role":"system","content":"system message"},
+		{"role":"developer","content":"developer message"},
+		{"type":"message","role":"user","content":"plain user text"},
     {"type":"message","role":"user","content":[
       {"type":"input_text","text":"structured user text"},
       {"type":"input_image","image_url":"https://example.test/image.png"}
@@ -26,8 +27,8 @@ func TestParseResponsesRequestExtractsMessagesAndToolResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResponsesRequest() error = %v", err)
 	}
-	if len(request.Contents) != 6 {
-		t.Fatalf("request contents = %+v, want six entries", request.Contents)
+	if len(request.Contents) != 7 {
+		t.Fatalf("request contents = %+v, want seven entries", request.Contents)
 	}
 	if got := request.Contents[0]; got.ID != 0 || got.Role != "system" || got.JSONPath != ".instructions" || got.Content != "top-level system instructions" {
 		t.Fatalf("instructions content = %+v", got)
@@ -35,16 +36,19 @@ func TestParseResponsesRequestExtractsMessagesAndToolResults(t *testing.T) {
 	if got := request.Contents[1]; got.ID != 1 || got.Role != "system" || got.JSONPath != ".input[0].content" || got.Content != "system message" {
 		t.Fatalf("system content = %+v", got)
 	}
-	if got := request.Contents[2]; got.ID != 2 || got.Role != "user" || got.JSONPath != ".input[1].content" || got.Content != "plain user text" {
+	if got := request.Contents[2]; got.ID != 2 || got.Role != "developer" || got.JSONPath != ".input[1].content" || got.Content != "developer message" {
+		t.Fatalf("developer content = %+v", got)
+	}
+	if got := request.Contents[3]; got.ID != 3 || got.Role != "user" || got.JSONPath != ".input[2].content" || got.Content != "plain user text" {
 		t.Fatalf("first user content = %+v", got)
 	}
-	if got := request.Contents[3]; got.ID != 3 || got.Role != "user" || got.JSONPath != ".input[2].content[0].text" || got.Content != "structured user text" {
+	if got := request.Contents[4]; got.ID != 4 || got.Role != "user" || got.JSONPath != ".input[3].content[0].text" || got.Content != "structured user text" {
 		t.Fatalf("second user content = %+v", got)
 	}
-	if got := request.Contents[4]; got.ID != 4 || got.Role != "assistant" || got.JSONPath != ".input[3].content[0].text" || got.Content != "previous assistant text" {
+	if got := request.Contents[5]; got.ID != 5 || got.Role != "assistant" || got.JSONPath != ".input[4].content[0].text" || got.Content != "previous assistant text" {
 		t.Fatalf("assistant content = %+v", got)
 	}
-	if got := request.Contents[5]; got.ID != 5 || got.Role != "tool_result" || got.JSONPath != ".input[4].output" || got.Content != "tool output" {
+	if got := request.Contents[6]; got.ID != 6 || got.Role != "tool_result" || got.JSONPath != ".input[5].output" || got.Content != "tool output" {
 		t.Fatalf("tool result content = %+v", got)
 	}
 }

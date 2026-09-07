@@ -116,6 +116,25 @@ func TestChatResponseExtractsAndMutatesTextParts(t *testing.T) {
 	}
 }
 
+func TestChatResponseExtractsAndMutatesTopLevelRefusal(t *testing.T) {
+	body := []byte(`{ "choices" : [ { "message" : { "role" : "assistant", "content" : null, "refusal" : "replace refusal" } } ] }`)
+	response, err := ParseChatResponse("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatResponse() error = %v", err)
+	}
+	if len(response.AssistantContents) != 1 || response.AssistantContents[0].JSONPath != ".choices[0].message.refusal" || response.AssistantContents[0].Content != "replace refusal" {
+		t.Fatalf("assistant contents = %+v", response.AssistantContents)
+	}
+	mutated, err := response.Mutate([]ChatResponseContentMutation{{ID: response.AssistantContents[0].ID, Content: "[MASKED]"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"replace refusal"`, `"[MASKED]"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated response changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
+	}
+}
+
 func TestChatResponseMutateRejectsUnknownOrDuplicateTargets(t *testing.T) {
 	response, err := ParseChatResponse("application/json", []byte(`{"choices":[{"message":{"role":"assistant","content":"one"}}]}`))
 	if err != nil {
@@ -168,12 +187,15 @@ func TestParseChatRequestExtractsMessageAndToolResultContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseChatRequest() error = %v", err)
 	}
-	if len(request.Contents) != 5 {
-		t.Fatalf("request contents = %+v, want five entries", request.Contents)
+	if len(request.Contents) != 6 {
+		t.Fatalf("request contents = %+v, want six entries", request.Contents)
 	}
-	system, assistant, toolResult, first, second := request.Contents[0], request.Contents[1], request.Contents[2], request.Contents[3], request.Contents[4]
+	system, developer, assistant, toolResult, first, second := request.Contents[0], request.Contents[1], request.Contents[2], request.Contents[3], request.Contents[4], request.Contents[5]
 	if system.MessageIndex != 0 || system.Role != "system" || system.JSONPath != ".messages[0].content" || system.Content != "system instructions" {
 		t.Fatalf("system content = %+v", system)
+	}
+	if developer.MessageIndex != 1 || developer.Role != "developer" || developer.JSONPath != ".messages[1].content" || developer.Content != "developer instructions" {
+		t.Fatalf("developer content = %+v", developer)
 	}
 	if assistant.MessageIndex != 2 || assistant.Role != "assistant" || assistant.JSONPath != ".messages[2].content" || assistant.Content != "assistant reply" {
 		t.Fatalf("assistant content = %+v", assistant)
@@ -186,6 +208,25 @@ func TestParseChatRequestExtractsMessageAndToolResultContent(t *testing.T) {
 	}
 	if second.MessageIndex != 5 || second.Role != "user" || second.JSONPath != ".messages[5].content" || second.Content != "second user message" {
 		t.Fatalf("second user content = %+v", second)
+	}
+}
+
+func TestChatRequestExtractsAndMutatesTopLevelRefusal(t *testing.T) {
+	body := []byte(`{ "messages" : [ { "role" : "assistant", "content" : null, "refusal" : "previous refusal" } ] }`)
+	request, err := ParseChatRequest("application/json", body)
+	if err != nil {
+		t.Fatalf("ParseChatRequest() error = %v", err)
+	}
+	if len(request.Contents) != 1 || request.Contents[0].JSONPath != ".messages[0].refusal" || request.Contents[0].Content != "previous refusal" {
+		t.Fatalf("request contents = %+v", request.Contents)
+	}
+	mutated, err := request.Mutate([]ChatContentMutation{{ID: request.Contents[0].ID, Content: "[MASKED]"}})
+	if err != nil {
+		t.Fatalf("Mutate() error = %v", err)
+	}
+	want := strings.Replace(string(body), `"previous refusal"`, `"[MASKED]"`, 1)
+	if string(mutated) != want {
+		t.Fatalf("mutated request changed unrelated JSON\ngot:  %s\nwant: %s", mutated, want)
 	}
 }
 

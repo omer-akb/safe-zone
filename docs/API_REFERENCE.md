@@ -298,7 +298,7 @@ TSZ implements the **request and response shape** of the OpenAI `chat/completion
    - `model`: any model name (forwarded as‑is to upstream)
    - `messages`: array of chat messages
    - `stream`: `false` (standard JSON response) or `true` (SSE streaming)
-2. TSZ runs `/detect` logic on **system, user, assistant, and tool-result messages**, including tool-call arguments, before calling the LLM:
+2. TSZ runs `/detect` logic on **developer, system, user, assistant, and tool-result messages**, including assistant refusals and tool-call arguments, before calling the LLM:
    - PII & secret detection
    - Guardrails / validators (e.g. `TOXIC_LANGUAGE`)
 3. If unsafe on input:
@@ -578,14 +578,14 @@ for chunk in stream:
 
 TSZ will:
 
-- Inspect and redact system, user, assistant, tool-call, and tool-result content.
+- Inspect and redact developer, system, user, assistant, tool-call, and tool-result content.
 - Forward the sanitized request to the configured upstream LLM service.
 - For non‑streaming calls, apply output guardrails to the full assistant message before returning.
 - For streaming calls, behave according to the chosen `X-TSZ-Guardrails-Mode` and `X-TSZ-Guardrails-OnFail`.
 
 Current limitations:
 
-- String content in `role == "system"`, `role == "user"`, `role == "assistant"`, and `role == "tool"` messages is scanned and redacted on input. Assistant `tool_calls[].function.arguments` strings are also scanned.
+- String content in `role == "developer"`, `role == "system"`, `role == "user"`, `role == "assistant"`, and `role == "tool"` messages is scanned and redacted on input. Assistant refusal content and `tool_calls[].function.arguments` strings are also scanned.
 - Streaming support is focused on **textual content** in `choices[].delta.content`.
 
 #### 3.2.6 Gateway Metadata (`tsz_meta`)
@@ -730,8 +730,8 @@ The supported non-streaming content fields are:
 
 | API | Request fields | Response fields |
 | --- | --- | --- |
-| Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for system/user/assistant/tool messages, assistant `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant `text`/`refusal` fields in content arrays, and `choices[].message.tool_calls[].function.arguments` |
-| Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
+| Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for developer/system/user/assistant/tool messages, assistant top-level and content-part `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant top-level and content-part `refusal` fields, and `choices[].message.tool_calls[].function.arguments` |
+| Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported developer/system/user/assistant message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
 | Embeddings (OpenAI-compatible) | Non-empty string `input` or non-empty array of non-empty strings; every item is inspected independently | Input-only: vectors, usage and provider errors pass through unchanged |
 | MCP Streamable HTTP | `prompts/get` string arguments and `tools/call` JSON-object arguments | Prompt text and embedded text resources; tool-result text, embedded text resources and `structuredContent` objects |
 | Anthropic Messages | Top-level string or text-block `system`; user/assistant string and text-block content; `tool_use.input`; string or text-block `tool_result.content` | Assistant text blocks and `tool_use.input` |

@@ -19,7 +19,7 @@ func (fn gatewayInspectFunc) Inspect(ctx context.Context, input guardrails.Inspe
 	return fn(ctx, input)
 }
 
-func TestApplyInputGuardrailsScansSystemUserAndAssistantMessages(t *testing.T) {
+func TestApplyInputGuardrailsScansDeveloperSystemUserAndAssistantMessages(t *testing.T) {
 	var inspected []string
 	service := gatewayInspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
 		inspected = append(inspected, input.Text)
@@ -27,9 +27,10 @@ func TestApplyInputGuardrailsScansSystemUserAndAssistantMessages(t *testing.T) {
 	})
 	messages := []interface{}{
 		map[string]interface{}{"role": "system", "content": "system secret"},
+		map[string]interface{}{"role": "developer", "content": "developer secret"},
 		map[string]interface{}{"role": "assistant", "content": "assistant history", "tool_calls": []interface{}{
 			map[string]interface{}{"id": "call_1", "type": "function", "function": map[string]interface{}{"name": "lookup", "arguments": "tool arguments"}},
-		}},
+		}, "refusal": "assistant refusal"},
 		map[string]interface{}{"role": "tool", "tool_call_id": "call_1", "content": "tool result"},
 		map[string]interface{}{"role": "user", "content": "user secret"},
 	}
@@ -38,7 +39,7 @@ func TestApplyInputGuardrailsScansSystemUserAndAssistantMessages(t *testing.T) {
 	if blocked {
 		t.Fatal("applyInputGuardrails() unexpectedly blocked")
 	}
-	wantInspected := []string{"system secret", "assistant history", "tool arguments", "tool result", "user secret"}
+	wantInspected := []string{"system secret", "developer secret", "assistant refusal", "assistant history", "tool arguments", "tool result", "user secret"}
 	if len(inspected) != len(wantInspected) {
 		t.Fatalf("inspected = %#v, want %#v", inspected, wantInspected)
 	}
@@ -47,12 +48,35 @@ func TestApplyInputGuardrailsScansSystemUserAndAssistantMessages(t *testing.T) {
 			t.Fatalf("inspected = %#v, want %#v", inspected, wantInspected)
 		}
 	}
-	if len(responses) != 5 {
-		t.Fatalf("responses = %d, want 5", len(responses))
+	if len(responses) != 7 {
+		t.Fatalf("responses = %d, want 7", len(responses))
 	}
-	toolArguments := got[1].(map[string]interface{})["tool_calls"].([]interface{})[0].(map[string]interface{})["function"].(map[string]interface{})["arguments"]
-	if got[0].(map[string]interface{})["content"] != "[MASKED]" || got[1].(map[string]interface{})["content"] != "[MASKED]" || toolArguments != "[MASKED]" || got[2].(map[string]interface{})["content"] != "[MASKED]" || got[3].(map[string]interface{})["content"] != "[MASKED]" {
+	toolArguments := got[2].(map[string]interface{})["tool_calls"].([]interface{})[0].(map[string]interface{})["function"].(map[string]interface{})["arguments"]
+	if got[0].(map[string]interface{})["content"] != "[MASKED]" || got[1].(map[string]interface{})["content"] != "[MASKED]" || got[2].(map[string]interface{})["content"] != "[MASKED]" || got[2].(map[string]interface{})["refusal"] != "[MASKED]" || toolArguments != "[MASKED]" || got[3].(map[string]interface{})["content"] != "[MASKED]" || got[4].(map[string]interface{})["content"] != "[MASKED]" {
 		t.Fatalf("sanitized messages = %#v", got)
+	}
+}
+
+func TestProcessNonStreamResponseScansTopLevelRefusal(t *testing.T) {
+	originalConfig := config.AppConfig
+	config.AppConfig = &config.Config{GatewayBlockMode: "MASK"}
+	t.Cleanup(func() { config.AppConfig = originalConfig })
+	service := gatewayInspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: "[MASKED]", ContainsSensitive: true}, nil
+	})
+	body := []byte(`{"choices":[{"message":{"role":"assistant","content":null,"refusal":"private refusal"}}]}`)
+	recorder := httptest.NewRecorder()
+	processNonStreamResponse(context.Background(), service, "rid-refusal-output", nil, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, recorder, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	message := payload["choices"].([]interface{})[0].(map[string]interface{})["message"].(map[string]interface{})
+	if message["refusal"] != "[MASKED]" || message["content"] != nil {
+		t.Fatalf("response message = %#v", message)
 	}
 }
 
