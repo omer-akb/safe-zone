@@ -260,9 +260,27 @@ and lifecycle. At minimum cover:
    status, and RBAC.
 
 Run `go test ./...` and the relevant race, integration, and clean-cluster suites.
-The reusable cross-gateway contract and conformance suites are separate Phase 7
-deliverables; until they exist, mirror the Envoy coverage rather than treating
-their absence as evidence of conformance.
+Every data-plane adapter must invoke the reusable contract suite from a native
+package test:
+
+```go
+func TestAdapterContract(t *testing.T) {
+    adaptertest.Run(t, newGatewayContractDriver())
+}
+```
+
+The driver implements `adaptertest.Driver`, constructs native lifecycle
+messages, calls the adapter's real input/output mapping functions, and returns
+semantic observations. It must not reproduce normalization or result-mapping
+logic merely to make the suite pass. The shared suite is in
+[`internal/extproc/adaptertest`](../../internal/extproc/adaptertest/contract.go),
+and the [Envoy driver](../../internal/extproc/envoy/contract_test.go) is the
+reference implementation.
+
+This transport contract suite and the cross-gateway conformance suite are
+separate Phase 7 deliverables. Passing the contract suite proves boundary
+semantics only; it is not evidence that masking, blocking, failure modes, and
+telemetry work end to end.
 
 ## Documentation and release gate
 
