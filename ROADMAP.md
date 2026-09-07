@@ -196,7 +196,7 @@ The roadmap is split into phases. Each bullet is a concrete, actionable item.
 - [ ] Support request enforcement first, followed by buffered response enforcement and explicitly scoped streaming modes
 - [ ] Publish and maintain an Envoy Gateway and Envoy AI Gateway compatibility matrix
 - [x] Add reusable data-plane adapter contract tests for normalized request/response mapping, ownership, mutations, safe blocking and metadata
-- [ ] Add a cross-gateway conformance suite for allow, mask, block, audit-only, failure modes, body limits, telemetry and streaming capabilities
+- [x] Add a cross-gateway conformance suite for request masking, blocking, response filtering, failure modes and telemetry
 - [ ] Build a native BYG control plane around the existing TSZ policy and audit capabilities:
   - [ ] Add immutable, versioned compiled-policy snapshots backed by PostgreSQL and distributed through Redis invalidation/version notifications
   - [ ] Reuse the existing detector, validators, templates, allowlist/blocklist and SIEM pipeline through a transport-neutral policy runtime

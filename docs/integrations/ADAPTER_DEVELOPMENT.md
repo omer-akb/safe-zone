@@ -279,8 +279,22 @@ reference implementation.
 
 This transport contract suite and the cross-gateway conformance suite are
 separate Phase 7 deliverables. Passing the contract suite proves boundary
-semantics only; it is not evidence that masking, blocking, failure modes, and
-telemetry work end to end.
+semantics only. Every adapter must also invoke `adaptertest.RunConformance`
+with a driver that runs the supplied processor and immutable snapshot through
+the adapter's real native server, middleware, or plugin entry point. The shared
+conformance scenarios verify request masking before upstream delivery, request
+blocking, response filtering before client delivery, request/response failure
+modes, and correlated PII-safe audit, metadata, and metric output.
+
+```go
+func TestAdapterConformance(t *testing.T) {
+    adaptertest.RunConformance(t, newGatewayConformanceDriver(t))
+}
+```
+
+See the [shared conformance suite](../../internal/extproc/adaptertest/conformance.go)
+and its [Envoy driver](../../internal/extproc/envoy/conformance_test.go). Optional
+scenarios are selected from the adapter's validated capability declaration.
 
 ## Documentation and release gate
 
