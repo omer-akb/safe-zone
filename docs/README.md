@@ -48,6 +48,9 @@ The documentation set is organized as follows:
 - **Gateway Adapter Development Contract** – Normative data-plane and optional native control-plane extension rules
   [integrations/ADAPTER_DEVELOPMENT.md](integrations/ADAPTER_DEVELOPMENT.md)
 
+- **Next Gateway Decision** – Demand evidence, provisional Kong selection and validation gates
+  [integrations/NEXT_GATEWAY_DECISION.md](integrations/NEXT_GATEWAY_DECISION.md)
+
 - **TSZ Policy API Upgrade** – Beta API compatibility, alpha migration, storage rewrite and adopter-feedback gates
   [operations/TSZ_POLICY_API_UPGRADE.md](operations/TSZ_POLICY_API_UPGRADE.md)
 

@@ -9,8 +9,10 @@ The shipped binary registers **`envoy-gateway` only**, using the existing
 Envoy Gateway 1.8.3 resource implementation. This change enables additional
 native adapters to be registered in controller code; it does not implement or
 claim support for Kong, APISIX, NGINX, Traefik, Istio or managed cloud gateways.
-Selecting the next gateway, its data-plane transport, compatibility testing,
-conformance suite and runnable integration guide remain Phase 7 work.
+Kong Gateway + KIC is the [provisional next adapter candidate](NEXT_GATEWAY_DECISION.md).
+Its data-plane transport, compatibility testing, conformance suite and runnable
+integration guide remain Phase 7 work; the shipped binary still registers no
+Kong implementation.
 
 ## Policy selection and compatibility
 
