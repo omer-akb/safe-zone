@@ -178,22 +178,24 @@ Client (untrusted)
 ```
 
 For an allowed response, Envoy forwards the original response. For a masked
-response, TSZ changes only supported Chat Completions or Responses API text
-fields. For a blocked response, Envoy returns a safe local `403` response
+response, TSZ changes only supported OpenAI, Anthropic Messages, or Gemini
+GenerateContent text and structured tool-payload fields. For a blocked response,
+Envoy returns a safe local `403` response
 instead of the upstream body. The raw upstream response may reach Envoy and
 the internal processor, but it is not released to the client before this
 buffered check completes.
 
-This guarantee applies to buffered, non-streaming OpenAI Chat Completions and
-Responses API text fields, including text nested in supported multimodal content
-arrays, system messages and Responses API `instructions`, assistant input history,
-tool-call arguments, and tool results. Streaming tool payloads, Responses API
-streaming, and inspection of multimodal image/audio/file data remain outside the
-current guarantee.
+This guarantee applies to buffered, non-streaming OpenAI Chat Completions,
+Responses API, Anthropic Messages, and Gemini GenerateContent fields documented
+in the API reference, including text nested in supported multimodal content,
+system instructions, assistant history, tool-call arguments, and tool results.
+Provider streaming formats and inspection of multimodal image/audio/file data
+remain outside the current guarantee.
 
 Tool-call inspection validates the supported payload shape and applies content
-guardrails to serialized arguments and returned text. It does not authorize or
-execute tools, and it never changes tool identity.
+guardrails to serialized arguments and returned text. Structured Anthropic and
+Gemini tool payload masks must remain valid JSON objects. Inspection does not
+authorize or execute tools, and it never changes tool identity.
 
 #### Trust boundaries and policy authority
 

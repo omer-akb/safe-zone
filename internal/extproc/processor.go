@@ -48,9 +48,9 @@ func (AllowProcessor) Process(ctx context.Context, request ProcessingRequest) (P
 	return ProcessingResult{Action: ActionAllow}, nil
 }
 
-// OpenAIRequestProcessor applies a stream-pinned policy to supported OpenAI
-// request and non-streaming response content. It never performs floating
-// policy lookups.
+// OpenAIRequestProcessor applies a stream-pinned policy to supported provider
+// request and non-streaming response content. The historical name is retained
+// for compatibility. It never performs floating policy lookups.
 type OpenAIRequestProcessor struct {
 	service guardrails.GuardrailService
 }
@@ -160,6 +160,13 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 }
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isAnthropicMessagesRequest(request) {
+		anthropic, err := ParseAnthropicRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, anthropic, false)
+	}
 	chat, err := ParseChatRequest(request.ContentType, request.Body)
 	if err == nil {
 		return p.processChatRequest(ctx, request, chat)
@@ -168,10 +175,29 @@ func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request Pro
 		return ProcessingResult{}, err
 	}
 	responses, responsesErr := ParseResponsesRequest(request.ContentType, request.Body)
-	if responsesErr != nil {
+	if responsesErr == nil {
+		return p.processResponsesRequest(ctx, request, responses)
+	}
+	if !errors.Is(responsesErr, ErrUnsupportedResponsesPayload) {
 		return ProcessingResult{}, responsesErr
 	}
-	return p.processResponsesRequest(ctx, request, responses)
+	gemini, geminiErr := ParseGeminiRequest(request.ContentType, request.Body)
+	if geminiErr != nil {
+		if errors.Is(geminiErr, ErrUnsupportedProviderPayload) {
+			return ProcessingResult{}, responsesErr
+		}
+		return ProcessingResult{}, geminiErr
+	}
+	return p.processProviderPayload(ctx, request, gemini, false)
+}
+
+func isAnthropicMessagesRequest(request ProcessingRequest) bool {
+	if FirstHeader(request.Headers, "anthropic-version") != "" {
+		return true
+	}
+	parser := jsonSourceParser{source: request.Body}
+	root, err := parser.parseDocument()
+	return err == nil && root.kind == jsonObject && root.object["anthropic_version"] != nil
 }
 
 func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request ProcessingRequest, chat *ChatRequest) (ProcessingResult, error) {
@@ -234,10 +260,27 @@ func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request Pr
 		return ProcessingResult{}, err
 	}
 	responses, responsesErr := ParseResponsesResponse(request.ContentType, request.Body)
-	if responsesErr != nil {
+	if responsesErr == nil {
+		return p.processResponsesResponse(ctx, request, responses)
+	}
+	if !errors.Is(responsesErr, ErrUnsupportedResponsesPayload) {
 		return ProcessingResult{}, responsesErr
 	}
-	return p.processResponsesResponse(ctx, request, responses)
+	anthropic, anthropicErr := ParseAnthropicResponse(request.ContentType, request.Body)
+	if anthropicErr == nil {
+		return p.processProviderPayload(ctx, request, anthropic, true)
+	}
+	if !errors.Is(anthropicErr, ErrUnsupportedProviderPayload) {
+		return ProcessingResult{}, anthropicErr
+	}
+	gemini, geminiErr := ParseGeminiResponse(request.ContentType, request.Body)
+	if geminiErr != nil {
+		if errors.Is(geminiErr, ErrUnsupportedProviderPayload) {
+			return ProcessingResult{}, responsesErr
+		}
+		return ProcessingResult{}, geminiErr
+	}
+	return p.processProviderPayload(ctx, request, gemini, true)
 }
 
 func (p *OpenAIRequestProcessor) processChatResponse(ctx context.Context, request ProcessingRequest, chat *ChatResponse) (ProcessingResult, error) {
@@ -321,7 +364,7 @@ func (p *OpenAIRequestProcessor) processResponsesRequest(ctx context.Context, re
 			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
-	result.Metadata = openAIResultMetadata(request, "openai_responses", result, categorySet, started)
+	result.Metadata = providerResultMetadata(request, "openai_responses", result, categorySet, started)
 	if result.Action != ActionMask || len(mutations) == 0 {
 		return result, nil
 	}
@@ -361,7 +404,7 @@ func (p *OpenAIRequestProcessor) processResponsesResponse(ctx context.Context, r
 			mutations = append(mutations, ResponsesContentMutation{ID: content.ID, Content: inspection.SafeContent})
 		}
 	}
-	result.Metadata = openAIResultMetadata(request, "openai_responses", result, categorySet, started)
+	result.Metadata = providerResultMetadata(request, "openai_responses", result, categorySet, started)
 	if result.Action != ActionMask || len(mutations) == 0 {
 		if result.Action == ActionBlock {
 			result.ImmediateStatus = 403
@@ -377,7 +420,56 @@ func (p *OpenAIRequestProcessor) processResponsesResponse(ctx context.Context, r
 	return result, nil
 }
 
-func openAIResultMetadata(request ProcessingRequest, adapter string, result ProcessingResult, categories map[string]struct{}, started time.Time) SafeMetadata {
+func (p *OpenAIRequestProcessor) processProviderPayload(ctx context.Context, request ProcessingRequest, payload *ProviderPayload, response bool) (ProcessingResult, error) {
+	var rules *guardrails.CompiledPolicyRules
+	var err error
+	if response {
+		rules, err = compiledResponseGuardrailRules(*request.PolicySnapshot)
+	} else {
+		rules, err = compiledGuardrailRules(*request.PolicySnapshot)
+	}
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result := ProcessingResult{Action: ActionAllow}
+	categories := make(map[string]struct{})
+	mutations := make([]ProviderContentMutation, 0)
+	started := time.Now()
+	for _, content := range payload.Contents {
+		inspection, inspectErr := p.inspectWithTrace(ctx, request, rules, content.Content)
+		if inspectErr != nil {
+			return ProcessingResult{}, fmt.Errorf("inspect %s content %s: %w", payload.Provider, content.JSONPath, inspectErr)
+		}
+		action, actionErr := actionFromGuardrail(inspection.Action)
+		if actionErr != nil {
+			return ProcessingResult{}, actionErr
+		}
+		result.Action = strongerProcessingAction(result.Action, action)
+		result.DetectionCount += inspection.DetectionCount
+		for _, category := range inspection.Categories {
+			categories[category] = struct{}{}
+		}
+		if action == ActionMask {
+			mutations = append(mutations, ProviderContentMutation{ID: content.ID, Content: inspection.SafeContent})
+		}
+	}
+	result.Metadata = providerResultMetadata(request, payload.Provider, result, categories, started)
+	if result.Action != ActionMask || len(mutations) == 0 {
+		if response && result.Action == ActionBlock {
+			result.ImmediateStatus = 403
+		}
+		return result, nil
+	}
+	body, err := payload.Mutate(mutations)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
+	result.Body = body
+	result.HeaderMutations = map[string]string{"content-length": strconv.Itoa(len(body))}
+	return result, nil
+}
+
+func providerResultMetadata(request ProcessingRequest, adapter string, result ProcessingResult, categories map[string]struct{}, started time.Time) SafeMetadata {
 	metadata := SafeMetadata{
 		RequestID: request.EnvoyReqID, RID: request.RID, PolicyID: request.PolicyID,
 		PolicyVersion: request.PolicyVersion, Adapter: adapter, Stage: request.Stage,

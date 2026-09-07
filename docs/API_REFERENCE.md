@@ -693,8 +693,8 @@ Gateway API **v1.5.1**. Installation and profile selection are documented in
 
 #### Response contract
 
-For a strict no-leakage guarantee, use buffered, non-streaming OpenAI Chat
-Completions or Responses API traffic. The request must use
+For a strict no-leakage guarantee, use supported buffered, non-streaming OpenAI,
+Anthropic Messages, or Gemini GenerateContent traffic. The request must use
 `Content-Type: application/json`; unsupported content shapes are processing
 failures, not silently allowed content. The separate Envoy BYG `Windowed` SSE
 mode currently understands Chat Completions events only and is best-effort: it
@@ -706,12 +706,17 @@ The supported non-streaming content fields are:
 | --- | --- | --- |
 | Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for system/user/assistant/tool messages, assistant `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant `text`/`refusal` fields in content arrays, and `choices[].message.tool_calls[].function.arguments` |
 | Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
+| Anthropic Messages | Top-level string or text-block `system`; user/assistant string and text-block content; `tool_use.input`; string or text-block `tool_result.content` | Assistant text blocks and `tool_use.input` |
+| Gemini GenerateContent | `systemInstruction` and `contents[].parts[].text`; `functionCall.args`, `functionResponse.response`, server `toolCall.args`/`toolResponse.response`, executable code and execution output | The corresponding supported fields in `candidates[].content.parts[]` |
 
 TSZ changes only the extracted text string values and the derived Responses
 API `output_text` value; item order, unknown fields and untouched JSON bytes
 are preserved. Tool names and execution authorization are not changed. Tool
 payloads in streaming events, the bytes or meaning of multimodal image/audio/file
-data, and Responses API streaming events are not covered by this capability yet.
+data, and Responses, Anthropic, or Gemini streaming events are not covered by
+this capability yet. Anthropic requests are selected using the required
+`anthropic-version` header; Gemini requests are selected by their
+`contents`/`systemInstruction` shape.
 
 | Policy action | Envoy result |
 | --- | --- |
@@ -720,7 +725,7 @@ data, and Responses API streaming events are not covered by this capability yet.
 | `MASK` | Replace only the unsafe assistant-content strings and update `content-length`. |
 | `BLOCK` | Replace the upstream response with a safe local `403` response. |
 
-This scope does **not** guarantee Responses API streaming enforcement.
+This scope does **not** guarantee Responses, Anthropic, or Gemini streaming enforcement.
 Configure both request and response bodies as `Buffered`; do not attach this
 profile to a route that requires an unbuffered or Responses SSE safety
 guarantee.

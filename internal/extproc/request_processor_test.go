@@ -540,6 +540,77 @@ func TestOpenAIRequestProcessorBlocksResponsesAPIOutput(t *testing.T) {
 	}
 }
 
+func TestRequestProcessorHandlesAnthropicMessages(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if strings.Contains(input.Text, "blocked") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionBlock, DetectionCount: 1, Categories: []string{"SECRET"}}, nil
+		}
+		if strings.Contains(input.Text, "secret") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: strings.ReplaceAll(input.Text, "secret", "[MASKED]"), DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	requestResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json", Headers: map[string][]string{"anthropic-version": {"2023-06-01"}},
+		Body:           []byte(`{"system":"secret system","messages":[{"role":"user","content":[{"type":"text","text":"safe"},{"type":"image","source":{"type":"base64","data":"AAAA"}}]}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("request Process() error = %v", err)
+	}
+	if requestResult.Action != ActionMask || requestResult.Metadata.Adapter != anthropicProvider || !strings.Contains(string(requestResult.Body), "[MASKED] system") || !strings.Contains(string(requestResult.Body), `"data":"AAAA"`) {
+		t.Fatalf("Anthropic request result = %+v body=%s", requestResult, requestResult.Body)
+	}
+	responseResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageResponse, ContentType: "application/json",
+		Body:           []byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"blocked output"}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("response Process() error = %v", err)
+	}
+	if responseResult.Action != ActionBlock || responseResult.ImmediateStatus != 403 || responseResult.Metadata.Adapter != anthropicProvider {
+		t.Fatalf("Anthropic response result = %+v", responseResult)
+	}
+}
+
+func TestRequestProcessorHandlesGeminiGenerateContent(t *testing.T) {
+	processor, err := NewOpenAIRequestProcessor(inspectFunc(func(_ context.Context, input guardrails.InspectInput) (guardrails.InspectResult, error) {
+		if strings.Contains(input.Text, "secret") {
+			return guardrails.InspectResult{Action: guardrails.RuleActionMask, SafeContent: strings.ReplaceAll(input.Text, "secret", "[MASKED]"), DetectionCount: 1, Categories: []string{"PII"}}, nil
+		}
+		return guardrails.InspectResult{Action: guardrails.RuleActionAllow, SafeContent: input.Text}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewOpenAIRequestProcessor() error = %v", err)
+	}
+	requestResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageRequest, ContentType: "application/json",
+		Body:           []byte(`{"contents":[{"role":"user","parts":[{"text":"secret prompt"},{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: requestPolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("request Process() error = %v", err)
+	}
+	if requestResult.Action != ActionMask || requestResult.Metadata.Adapter != geminiProvider || !strings.Contains(string(requestResult.Body), "[MASKED] prompt") || !strings.Contains(string(requestResult.Body), `"data":"AAAA"`) {
+		t.Fatalf("Gemini request result = %+v body=%s", requestResult, requestResult.Body)
+	}
+	responseResult, err := processor.Process(context.Background(), ProcessingRequest{
+		Stage: StageResponse, ContentType: "application/json",
+		Body:           []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"secret output"}]}}]}`),
+		PolicySnapshot: &policy.CompiledSnapshot{PolicyID: "default", Version: 1, Definition: responsePolicyDefinition()},
+	})
+	if err != nil {
+		t.Fatalf("response Process() error = %v", err)
+	}
+	if responseResult.Action != ActionMask || responseResult.Metadata.Adapter != geminiProvider || !strings.Contains(string(responseResult.Body), "[MASKED] output") {
+		t.Fatalf("Gemini response result = %+v body=%s", responseResult, responseResult.Body)
+	}
+}
+
 func compiledPolicyProcessor(t *testing.T) *OpenAIRequestProcessor {
 	t.Helper()
 	service, err := guardrails.NewGuardrailService(&guardrails.Detector{})
