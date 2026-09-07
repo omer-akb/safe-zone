@@ -1,4 +1,4 @@
-package v1alpha1
+package v1beta1
 
 import (
 	"time"
@@ -40,7 +40,7 @@ const (
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,path=tszguardrailpolicies,shortName=tszgp
-// +kubebuilder:deprecatedversion:warning="security.thyris.ai/v1alpha1 TSZGuardrailPolicy is deprecated; use security.thyris.ai/v1beta1"
+// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Accepted",type=string,JSONPath=`.status.conditions[?(@.type=="Accepted")].status`
 // +kubebuilder:printcolumn:name="Programmed",type=string,JSONPath=`.status.conditions[?(@.type=="Programmed")].status`

@@ -42,6 +42,9 @@ The documentation set is organized as follows:
 - **Envoy Gateway Integration** – Preview/manual and native/managed installation profiles
   `integrations/ENVOY_GATEWAY.md`
 
+- **TSZ Policy API Upgrade** – Beta API compatibility, alpha migration, storage rewrite and adopter-feedback gates
+  [operations/TSZ_POLICY_API_UPGRADE.md](operations/TSZ_POLICY_API_UPGRADE.md)
+
 - **BYG Deployment Operations** – Deployment topology, operational verification and change management
   `operations/BYG_DEPLOYMENT.md`
 

@@ -226,6 +226,11 @@ plane.
 
 1. Install the generated CRD and RBAC:
 
+   New installations use `security.thyris.ai/v1beta1`. The CRD also serves
+   deprecated `v1alpha1` manifests. For an existing installation, apply the
+   [policy API upgrade procedure](../operations/TSZ_POLICY_API_UPGRADE.md) before
+   rolling out the beta controller.
+
    ```bash
    kubectl apply -f config/crd/bases/security.thyris.ai_tszguardrailpolicies.yaml
    kubectl apply -f config/rbac/role.yaml
@@ -304,6 +309,11 @@ route.
    `TSZGuardrailPolicy` manifests and their `status.observedGeneration`.
 
 ### Workload and manifest upgrade
+
+For the alpha-to-beta policy API transition, follow the
+[version-specific upgrade and storage migration guide](../operations/TSZ_POLICY_API_UPGRADE.md).
+It requires the dual-version CRD before the beta controller and retains alpha
+client access for workload rollback.
 
 1. Review the target manifests with `kubectl diff` (or the equivalent Helm or
    Kustomize render-and-diff step used by the deployment). Pin image tags or,

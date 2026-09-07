@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/extproc/policy"
 )
 
@@ -27,7 +27,7 @@ func TestToPolicyDefinitionConvertsInlinePolicyWithoutMutation(t *testing.T) {
 }
 
 func TestToPolicyDefinitionRejectsNonInlineAndInvalidActions(t *testing.T) {
-	if _, err := ToPolicyDefinition(securityv1alpha1.TSZGuardrailPolicySpec{}, policy.Scope{}); err == nil {
+	if _, err := ToPolicyDefinition(securityv1beta1.TSZGuardrailPolicySpec{}, policy.Scope{}); err == nil {
 		t.Fatal("ToPolicyDefinition() error = nil for non-inline spec")
 	}
 	spec := inlineSpec()
@@ -93,12 +93,12 @@ type noOpPublisher struct{}
 
 func (noOpPublisher) PublishActivation(context.Context, policy.ActivationEvent) error { return nil }
 
-func inlineSpec() securityv1alpha1.TSZGuardrailPolicySpec {
-	return securityv1alpha1.TSZGuardrailPolicySpec{
-		PolicySource:  securityv1alpha1.PolicySourceInline,
-		Request:       &securityv1alpha1.RequestPolicySpec{PII: securityv1alpha1.PolicyActionMask, Secret: securityv1alpha1.PolicyActionBlock, PromptInjection: securityv1alpha1.PolicyActionAuditOnly, CustomPatternIDs: []string{"1"}},
-		Response:      &securityv1alpha1.ResponsePolicySpec{Enabled: true, PII: securityv1alpha1.PolicyActionMask, Secret: securityv1alpha1.PolicyActionBlock, UnsafeContent: securityv1alpha1.PolicyActionBlock},
-		FailurePolicy: securityv1alpha1.FailurePolicySpec{Request: securityv1alpha1.FailureModeClosed, Response: securityv1alpha1.FailureModeOpen},
-		Telemetry:     securityv1alpha1.TelemetrySpec{Enabled: true, SampleRate: 0.25},
+func inlineSpec() securityv1beta1.TSZGuardrailPolicySpec {
+	return securityv1beta1.TSZGuardrailPolicySpec{
+		PolicySource:  securityv1beta1.PolicySourceInline,
+		Request:       &securityv1beta1.RequestPolicySpec{PII: securityv1beta1.PolicyActionMask, Secret: securityv1beta1.PolicyActionBlock, PromptInjection: securityv1beta1.PolicyActionAuditOnly, CustomPatternIDs: []string{"1"}},
+		Response:      &securityv1beta1.ResponsePolicySpec{Enabled: true, PII: securityv1beta1.PolicyActionMask, Secret: securityv1beta1.PolicyActionBlock, UnsafeContent: securityv1beta1.PolicyActionBlock},
+		FailurePolicy: securityv1beta1.FailurePolicySpec{Request: securityv1beta1.FailureModeClosed, Response: securityv1beta1.FailureModeOpen},
+		Telemetry:     securityv1beta1.TelemetrySpec{Enabled: true, SampleRate: 0.25},
 	}
 }

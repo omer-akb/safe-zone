@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/extproc/policy"
 )
 
@@ -74,8 +74,8 @@ func (c *Compiler) EnsureCompiledAndActive(ctx context.Context, dbPolicyName str
 
 // ToPolicyDefinition converts an Inline CRD policy without side effects. The
 // compiler lifecycle subsequently resolves external references atomically.
-func ToPolicyDefinition(spec securityv1alpha1.TSZGuardrailPolicySpec, scope policy.Scope) (policy.PolicyDefinition, error) {
-	if spec.PolicySource != securityv1alpha1.PolicySourceInline || spec.Request == nil || spec.Response == nil {
+func ToPolicyDefinition(spec securityv1beta1.TSZGuardrailPolicySpec, scope policy.Scope) (policy.PolicyDefinition, error) {
+	if spec.PolicySource != securityv1beta1.PolicySourceInline || spec.Request == nil || spec.Response == nil {
 		return policy.PolicyDefinition{}, errors.New("inline policy source requires request and response policy specs")
 	}
 	definition := policy.PolicyDefinition{
@@ -114,7 +114,7 @@ func ToPolicyDefinition(spec securityv1alpha1.TSZGuardrailPolicySpec, scope poli
 	return definition, nil
 }
 
-func toTemplateReferences(references []securityv1alpha1.TemplateReference) []policy.TemplateReference {
+func toTemplateReferences(references []securityv1beta1.TemplateReference) []policy.TemplateReference {
 	converted := make([]policy.TemplateReference, 0, len(references))
 	for _, reference := range references {
 		converted = append(converted, policy.TemplateReference{Name: reference.Name, Version: int(reference.Version)})
@@ -130,33 +130,33 @@ func InlinePolicyName(namespace, policyName, targetKey string) string {
 	return fmt.Sprintf("crd/%s/%s/%s", namespace, policyName, hex.EncodeToString(digest[:8]))
 }
 
-func toPolicyAction(action securityv1alpha1.PolicyAction) policy.Action {
+func toPolicyAction(action securityv1beta1.PolicyAction) policy.Action {
 	switch action {
-	case securityv1alpha1.PolicyActionAllow:
+	case securityv1beta1.PolicyActionAllow:
 		return policy.ActionAllow
-	case securityv1alpha1.PolicyActionMask:
+	case securityv1beta1.PolicyActionMask:
 		return policy.ActionMask
-	case securityv1alpha1.PolicyActionBlock:
+	case securityv1beta1.PolicyActionBlock:
 		return policy.ActionBlock
-	case securityv1alpha1.PolicyActionAuditOnly:
+	case securityv1beta1.PolicyActionAuditOnly:
 		return policy.ActionAuditOnly
 	default:
 		return policy.Action(action)
 	}
 }
 
-func toFailureMode(mode securityv1alpha1.FailureMode) policy.FailureMode {
+func toFailureMode(mode securityv1beta1.FailureMode) policy.FailureMode {
 	switch mode {
-	case securityv1alpha1.FailureModeOpen:
+	case securityv1beta1.FailureModeOpen:
 		return policy.FailureModeOpen
-	case securityv1alpha1.FailureModeClosed:
+	case securityv1beta1.FailureModeClosed:
 		return policy.FailureModeClosed
 	default:
 		return policy.FailureMode(mode)
 	}
 }
 
-func toValidatorReferences(references []securityv1alpha1.ValidatorReference) []policy.ValidatorReference {
+func toValidatorReferences(references []securityv1beta1.ValidatorReference) []policy.ValidatorReference {
 	converted := make([]policy.ValidatorReference, 0, len(references))
 	for _, reference := range references {
 		converted = append(converted, policy.ValidatorReference{ID: reference.ID, Version: int(reference.Version)})

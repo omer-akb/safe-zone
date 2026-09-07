@@ -1,6 +1,6 @@
 # Two same-level attachments for the bootstrap HTTPRoute. Applying both must
 # leave neither policy Programmed and must not leave an EnvoyExtensionPolicy.
-apiVersion: security.thyris.ai/v1alpha1
+apiVersion: security.thyris.ai/v1beta1
 kind: TSZGuardrailPolicy
 metadata:
   name: checkpoint-conflict-a
@@ -24,7 +24,7 @@ spec:
     request: FailClosed
     response: FailClosed
 ---
-apiVersion: security.thyris.ai/v1alpha1
+apiVersion: security.thyris.ai/v1beta1
 kind: TSZGuardrailPolicy
 metadata:
   name: checkpoint-conflict-b

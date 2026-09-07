@@ -17,6 +17,10 @@ upstream service.
 
 The Envoy Gateway installation guide is at
 [integrations/ENVOY_GATEWAY.md](../integrations/ENVOY_GATEWAY.md).
+The native `TSZGuardrailPolicy` API is `security.thyris.ai/v1beta1`; the original
+`v1alpha1` API remains served for compatibility. The
+[API graduation record](../operations/TSZ_POLICY_API_UPGRADE.md) documents the
+schema-preserving transition, verification evidence and open GA feedback gates.
 The [Extension Server security evaluation](../security/BYG_EXTENSION_SERVER_EVALUATION.md)
 records why direct xDS control-plane integration remains experimental.
 

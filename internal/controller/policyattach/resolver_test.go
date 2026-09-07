@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/controller"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,9 +39,9 @@ func TestResolverResolvesSupportedTargetsAndSections(t *testing.T) {
 		},
 	).Build()}
 
-	policy := &securityv1alpha1.TSZGuardrailPolicy{
+	policy := &securityv1beta1.TSZGuardrailPolicy{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "guardrails"},
-		Spec: securityv1alpha1.TSZGuardrailPolicySpec{TargetRefs: []gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{
+		Spec: securityv1beta1.TSZGuardrailPolicySpec{TargetRefs: []gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{
 			targetRef("Gateway", "edge", &listenerName),
 			targetRef("HTTPRoute", "web", &httpRuleName),
 			targetRef("GRPCRoute", "grpc", &grpcRuleName),
@@ -72,9 +72,9 @@ func TestResolverReportsInvalidTargetsWithoutSkippingThem(t *testing.T) {
 	resolver := &Resolver{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 		&gatewayv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "edge"}},
 	).Build()}
-	policy := &securityv1alpha1.TSZGuardrailPolicy{
+	policy := &securityv1beta1.TSZGuardrailPolicy{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "apps"},
-		Spec: securityv1alpha1.TSZGuardrailPolicySpec{TargetRefs: []gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{
+		Spec: securityv1beta1.TSZGuardrailPolicySpec{TargetRefs: []gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{
 			targetRef("Gateway", "edge", &missingSection),
 			targetRef("HTTPRoute", "missing", nil),
 			targetRefWithGroup("other.example", "Gateway", "edge", nil),

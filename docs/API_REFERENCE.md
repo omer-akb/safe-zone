@@ -691,6 +691,20 @@ The checked-in reference environment supports Envoy Gateway **v1.8.3** and
 Gateway API **v1.5.1**. Installation and profile selection are documented in
 [the Envoy Gateway integration guide](integrations/ENVOY_GATEWAY.md).
 
+#### Kubernetes policy API versions
+
+New native policy manifests use `apiVersion: security.thyris.ai/v1beta1` and
+`kind: TSZGuardrailPolicy`. The beta controller uses this API version;
+`v1alpha1` remains served with a deprecation warning for existing clients.
+Both versions expose identical spec/status schemas, defaults and validation,
+while all new writes are stored as `v1beta1`. This version is independent of
+Envoy's API version and of immutable TSZ policy snapshot versions.
+
+Install the dual-version CRD before upgrading the controller. Existing policy
+manifests need only an `apiVersion` change. See the
+[policy API upgrade guide](operations/TSZ_POLICY_API_UPGRADE.md) for compatibility
+evidence, storage migration, supported rollback and the remaining GA feedback gates.
+
 #### Response contract
 
 For a strict no-leakage guarantee, use supported buffered, non-streaming OpenAI,

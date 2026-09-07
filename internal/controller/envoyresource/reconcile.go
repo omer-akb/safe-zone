@@ -8,7 +8,7 @@ import (
 	"time"
 
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,7 +36,7 @@ type EnvoyResourceReconciler struct {
 
 // ReconcileExtensionPolicy creates or updates exactly one deterministic
 // EnvoyExtensionPolicy for a resolved target and assigns its CRD owner.
-func (r *EnvoyResourceReconciler) ReconcileExtensionPolicy(ctx context.Context, owner *securityv1alpha1.TSZGuardrailPolicy, target gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, effective EffectivePolicy) (controllerutil.OperationResult, error) {
+func (r *EnvoyResourceReconciler) ReconcileExtensionPolicy(ctx context.Context, owner *securityv1beta1.TSZGuardrailPolicy, target gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, effective EffectivePolicy) (controllerutil.OperationResult, error) {
 	if r == nil || r.Client == nil || r.Scheme == nil {
 		return controllerutil.OperationResultNone, fmt.Errorf("envoy resource reconciler client and scheme are required")
 	}
@@ -55,7 +55,7 @@ func (r *EnvoyResourceReconciler) ReconcileExtensionPolicy(ctx context.Context, 
 
 // BuildEnvoyExtensionPolicy creates the native equivalent of the manual
 // preview manifest. The manual file remains supported for preview installs.
-func BuildEnvoyExtensionPolicy(owner *securityv1alpha1.TSZGuardrailPolicy, target gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, effective EffectivePolicy) *egv1alpha1.EnvoyExtensionPolicy {
+func BuildEnvoyExtensionPolicy(owner *securityv1beta1.TSZGuardrailPolicy, target gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, effective EffectivePolicy) *egv1alpha1.EnvoyExtensionPolicy {
 	localTarget := gatewayv1.LocalPolicyTargetReferenceWithSectionName(target)
 	timeout := effective.ProcessingTimeout
 	if timeout <= 0 {
@@ -88,7 +88,7 @@ func bodyMode() *egv1alpha1.ExtProcBodyProcessingMode {
 	return &mode
 }
 
-func responseBodyMode(owner *securityv1alpha1.TSZGuardrailPolicy) *egv1alpha1.ExtProcBodyProcessingMode {
+func responseBodyMode(owner *securityv1beta1.TSZGuardrailPolicy) *egv1alpha1.ExtProcBodyProcessingMode {
 	if owner != nil && owner.Spec.StreamingMode() == "Windowed" {
 		mode := egv1alpha1.StreamedExtProcBodyProcessingMode
 		return &mode

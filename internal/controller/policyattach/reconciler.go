@@ -10,7 +10,7 @@ import (
 	"time"
 
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
-	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/controller/capabilities"
 	"thyris-sz/internal/controller/controllermetrics"
 	"thyris-sz/internal/controller/effectivepolicy"
@@ -57,13 +57,13 @@ type PolicyAttachmentReconciler struct {
 }
 
 type TargetResolver interface {
-	ResolveTargets(context.Context, *securityv1alpha1.TSZGuardrailPolicy) []ResolvedTarget
+	ResolveTargets(context.Context, *securityv1beta1.TSZGuardrailPolicy) []ResolvedTarget
 }
 type PrecedenceSelector interface {
 	Select([]effectivepolicy.Candidate) (effectivepolicy.Candidate, *effectivepolicy.ConflictError)
 }
 type EnvoyReconciler interface {
-	ReconcileExtensionPolicy(context.Context, *securityv1alpha1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, envoyresource.EffectivePolicy) (controllerutil.OperationResult, error)
+	ReconcileExtensionPolicy(context.Context, *securityv1beta1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, envoyresource.EffectivePolicy) (controllerutil.OperationResult, error)
 }
 type OwnershipTracker interface {
 	ClaimOwnership(context.Context, string, *string, string, string) error
@@ -101,21 +101,21 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		controllermetrics.ObserveReconcile("tszguardrailpolicy", outcome, time.Since(started))
 		r.recordManagedExtensionPolicies(ctx)
 	}()
-	policy := &securityv1alpha1.TSZGuardrailPolicy{}
+	policy := &securityv1beta1.TSZGuardrailPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !policy.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, policy)
 	}
-	if policy.Spec.PolicySource == securityv1alpha1.PolicySourceInline && !controllerutil.ContainsFinalizer(policy, policyAttachmentFinalizer) {
+	if policy.Spec.PolicySource == securityv1beta1.PolicySourceInline && !controllerutil.ContainsFinalizer(policy, policyAttachmentFinalizer) {
 		controllerutil.AddFinalizer(policy, policyAttachmentFinalizer)
 		if err := r.Update(ctx, policy); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add policy attachment finalizer: %w", err)
 		}
 	}
 	if err := capabilities.CheckCapabilities(policy.Spec, capabilities.EnvoyGatewayCapabilities); err != nil {
-		securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionProgrammed, Status: metav1.ConditionFalse, Reason: securityv1alpha1.ReasonUnsupportedCapability, Message: err.Error(), ObservedGeneration: policy.Generation})
+		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonUnsupportedCapability, Message: err.Error(), ObservedGeneration: policy.Generation})
 		if updateErr := r.Status().Update(ctx, policy); updateErr != nil {
 			return ctrl.Result{}, fmt.Errorf("update unsupported capability status: %w", updateErr)
 		}
@@ -124,7 +124,7 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	resolved := r.targetResolver.ResolveTargets(ctx, policy)
 	// A failing reference never changes a last-known-good Envoy policy.
-	if policy.Spec.PolicySource == securityv1alpha1.PolicySourcePostgresRef && r.referenceResolver != nil {
+	if policy.Spec.PolicySource == securityv1beta1.PolicySourcePostgresRef && r.referenceResolver != nil {
 		result := r.referenceResolver.Resolve(ctx, policy.Spec.PolicyRef, nil)
 		if result.Reason != effectivepolicy.ResolutionResolved {
 			r.publishReferenceFailure(ctx, policy, result)
@@ -135,7 +135,7 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			policy.Status.PolicyVersion = &version
 		}
 		policy.Status.EffectivePolicyID = policy.Spec.PolicyRef.Name
-		securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1alpha1.ReasonSnapshotActive, Message: "referenced immutable policy snapshot resolved", ObservedGeneration: policy.Generation})
+		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonSnapshotActive, Message: "referenced immutable policy snapshot resolved", ObservedGeneration: policy.Generation})
 	}
 	if r.envoyReconciler != nil {
 		for _, target := range resolved {
@@ -158,7 +158,7 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			if winner.ID != policyIdentity(policy) {
 				continue
 			}
-			if policy.Spec.PolicySource == securityv1alpha1.PolicySourceInline && r.effectiveCompiler != nil {
+			if policy.Spec.PolicySource == securityv1beta1.PolicySourceInline && r.effectiveCompiler != nil {
 				dbPolicyName := effectivepolicy.InlinePolicyName(policy.Namespace, policy.Name, targetKey(target))
 				definition, err := effectivepolicy.ToPolicyDefinition(policy.Spec, policyScope(target))
 				if err != nil {
@@ -197,13 +197,13 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 						return r.ownershipUnavailable(ctx, policy, err)
 					}
 				}
-				securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1alpha1.ReasonSnapshotActive, Message: "activation published; per-replica confirmation not yet implemented", ObservedGeneration: policy.Generation})
+				securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonSnapshotActive, Message: "activation published; per-replica confirmation not yet implemented", ObservedGeneration: policy.Generation})
 			}
 			_, err = r.envoyReconciler.ReconcileExtensionPolicy(ctx, policy, target.Ref, envoyresource.EffectivePolicy{ProcessingTimeout: policy.Spec.ProcessingTimeoutOrDefault(), FailOpen: policy.Spec.FailOpen()})
 			if err != nil {
 				return ctrl.Result{}, err
 			}
-			securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1alpha1.ReasonExtProcConfigured, Message: "EnvoyExtensionPolicy reconciled", ObservedGeneration: policy.Generation})
+			securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonExtProcConfigured, Message: "EnvoyExtensionPolicy reconciled", ObservedGeneration: policy.Generation})
 		}
 	}
 	if err := r.publishTargetResolutionStatus(ctx, policy, resolved); err != nil {
@@ -264,7 +264,7 @@ func (r *PolicyAttachmentReconciler) recordManagedExtensionPolicies(ctx context.
 	controllermetrics.SetManagedExtensionPolicies(len(resources.Items))
 }
 
-func (r *PolicyAttachmentReconciler) candidatesForTarget(ctx context.Context, current *securityv1alpha1.TSZGuardrailPolicy, target ResolvedTarget) ([]effectivepolicy.Candidate, error) {
+func (r *PolicyAttachmentReconciler) candidatesForTarget(ctx context.Context, current *securityv1beta1.TSZGuardrailPolicy, target ResolvedTarget) ([]effectivepolicy.Candidate, error) {
 	keys := []string{targetRefKey(string(target.Ref.Group), target.Kind, string(target.Ref.Name))}
 	listenerNames := map[string]struct{}{}
 	switch object := target.Object.(type) {
@@ -292,7 +292,7 @@ func (r *PolicyAttachmentReconciler) candidatesForTarget(ctx context.Context, cu
 	seen := map[string]struct{}{}
 	candidates := []effectivepolicy.Candidate{}
 	for _, key := range keys {
-		policies := &securityv1alpha1.TSZGuardrailPolicyList{}
+		policies := &securityv1beta1.TSZGuardrailPolicyList{}
 		if err := r.List(ctx, policies, client.InNamespace(current.Namespace), client.MatchingFields{targetRefIndex: key}); err != nil {
 			return nil, fmt.Errorf("list policy candidates: %w", err)
 		}
@@ -343,10 +343,10 @@ func sectionKey(ref gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName) s
 	}
 	return "/" + string(*ref.SectionName)
 }
-func policyIdentity(object *securityv1alpha1.TSZGuardrailPolicy) string {
+func policyIdentity(object *securityv1beta1.TSZGuardrailPolicy) string {
 	return object.Namespace + "/" + object.Name
 }
-func (r *PolicyAttachmentReconciler) publishConflict(ctx context.Context, object *securityv1alpha1.TSZGuardrailPolicy, conflict *effectivepolicy.ConflictError) {
+func (r *PolicyAttachmentReconciler) publishConflict(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, conflict *effectivepolicy.ConflictError) {
 	before := object.DeepCopy().Status
 	others := make([]string, 0, len(conflict.Candidates))
 	for _, candidate := range conflict.Candidates {
@@ -354,7 +354,7 @@ func (r *PolicyAttachmentReconciler) publishConflict(ctx context.Context, object
 			others = append(others, candidate.ID)
 		}
 	}
-	securityv1alpha1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionProgrammed, Status: metav1.ConditionFalse, Reason: securityv1alpha1.ReasonConflicted, Message: "conflicts with TSZGuardrailPolicy/" + strings.Join(others, ","), ObservedGeneration: object.Generation})
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonConflicted, Message: "conflicts with TSZGuardrailPolicy/" + strings.Join(others, ","), ObservedGeneration: object.Generation})
 	if !reflect.DeepEqual(before, object.Status) {
 		_ = r.Status().Update(ctx, object)
 	}
@@ -363,7 +363,7 @@ func (r *PolicyAttachmentReconciler) publishConflict(ctx context.Context, object
 // removeOwnedExtensionPolicy withdraws a configuration only when this CRD is
 // its controller owner. A same-level conflict is an explicit safety rejection,
 // not a compilation failure, so no conflicted policy may remain programmed.
-func (r *PolicyAttachmentReconciler) removeOwnedExtensionPolicy(ctx context.Context, owner *securityv1alpha1.TSZGuardrailPolicy, target ResolvedTarget) error {
+func (r *PolicyAttachmentReconciler) removeOwnedExtensionPolicy(ctx context.Context, owner *securityv1beta1.TSZGuardrailPolicy, target ResolvedTarget) error {
 	resource := &egv1alpha1.EnvoyExtensionPolicy{}
 	key := types.NamespacedName{Namespace: owner.Namespace, Name: envoyresource.DeterministicName(target.Ref)}
 	if err := r.Get(ctx, key, resource); err != nil {
@@ -380,50 +380,50 @@ func (r *PolicyAttachmentReconciler) removeOwnedExtensionPolicy(ctx context.Cont
 	return nil
 }
 
-func (r *PolicyAttachmentReconciler) lastKnownGoodFailure(ctx context.Context, object *securityv1alpha1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
-	securityv1alpha1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1alpha1.ReasonSnapshotRejected, Message: err.Error(), ObservedGeneration: object.Generation})
+func (r *PolicyAttachmentReconciler) lastKnownGoodFailure(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonSnapshotRejected, Message: err.Error(), ObservedGeneration: object.Generation})
 	// No EnvoyExtensionPolicy operation is attempted here. Any existing child
 	// remains the last known good configuration while the update is retried.
-	securityv1alpha1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1alpha1.ReasonExtProcConfigured, Message: "last known good EnvoyExtensionPolicy remains programmed", ObservedGeneration: object.Generation})
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonExtProcConfigured, Message: "last known good EnvoyExtensionPolicy remains programmed", ObservedGeneration: object.Generation})
 	if updateErr := r.Status().Update(ctx, object); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("update last-known-good status: %w", updateErr)
 	}
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func (r *PolicyAttachmentReconciler) activationNotificationPending(ctx context.Context, object *securityv1alpha1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
+func (r *PolicyAttachmentReconciler) activationNotificationPending(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
 	// The active snapshot transaction has committed, but ext-proc replicas have
 	// not yet been notified. Keep the previously reported version until Redis
 	// publish succeeds, then retry only the notification path.
-	securityv1alpha1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1alpha1.ReasonProcessorUnavailable, Message: activationNotificationPending, ObservedGeneration: object.Generation})
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonProcessorUnavailable, Message: activationNotificationPending, ObservedGeneration: object.Generation})
 	if updateErr := r.Status().Update(ctx, object); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("update activation notification status: %w", updateErr)
 	}
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func (r *PolicyAttachmentReconciler) ownershipUnavailable(ctx context.Context, object *securityv1alpha1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
-	securityv1alpha1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1alpha1.ReasonProcessorUnavailable, Message: fmt.Sprintf("record Inline policy ownership: %v", err), ObservedGeneration: object.Generation})
+func (r *PolicyAttachmentReconciler) ownershipUnavailable(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonProcessorUnavailable, Message: fmt.Sprintf("record Inline policy ownership: %v", err), ObservedGeneration: object.Generation})
 	if updateErr := r.Status().Update(ctx, object); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("update ownership status: %w", updateErr)
 	}
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func isActivationNotificationPending(object *securityv1alpha1.TSZGuardrailPolicy) bool {
+func isActivationNotificationPending(object *securityv1beta1.TSZGuardrailPolicy) bool {
 	for _, condition := range object.Status.Conditions {
-		if condition.Type == securityv1alpha1.ConditionPolicySynced && condition.Status == metav1.ConditionFalse && condition.Reason == securityv1alpha1.ReasonProcessorUnavailable && condition.Message == activationNotificationPending {
+		if condition.Type == securityv1beta1.ConditionPolicySynced && condition.Status == metav1.ConditionFalse && condition.Reason == securityv1beta1.ReasonProcessorUnavailable && condition.Message == activationNotificationPending {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *PolicyAttachmentReconciler) handleDeletion(ctx context.Context, object *securityv1alpha1.TSZGuardrailPolicy) (ctrl.Result, error) {
+func (r *PolicyAttachmentReconciler) handleDeletion(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(object, policyAttachmentFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	if object.Spec.PolicySource == securityv1alpha1.PolicySourceInline && r.ownershipTracker != nil {
+	if object.Spec.PolicySource == securityv1beta1.PolicySourceInline && r.ownershipTracker != nil {
 		for _, ref := range object.Spec.TargetRefs {
 			name := effectivepolicy.InlinePolicyName(object.Namespace, object.Name, targetRefKeyFromRef(ref))
 			if err := r.ownershipTracker.ReleaseOwnership(ctx, name, nil, object.Namespace, object.Name); err != nil {
@@ -464,51 +464,51 @@ func policyScope(target ResolvedTarget) extprocpolicy.Scope {
 	return scope
 }
 
-func (r *PolicyAttachmentReconciler) publishReferenceFailure(ctx context.Context, policy *securityv1alpha1.TSZGuardrailPolicy, result effectivepolicy.ResolutionResult) {
+func (r *PolicyAttachmentReconciler) publishReferenceFailure(ctx context.Context, policy *securityv1beta1.TSZGuardrailPolicy, result effectivepolicy.ResolutionResult) {
 	message := result.Reason
 	if result.Err != nil {
 		message = result.Err.Error()
 	}
-	securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, Reason: securityv1alpha1.ReasonValid, Message: "policy spec accepted", ObservedGeneration: policy.Generation})
-	securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1alpha1.ConditionResolvedRefs, Status: metav1.ConditionFalse, Reason: result.Reason, Message: message, ObservedGeneration: policy.Generation})
+	securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionAccepted, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonValid, Message: "policy spec accepted", ObservedGeneration: policy.Generation})
+	securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionResolvedRefs, Status: metav1.ConditionFalse, Reason: result.Reason, Message: message, ObservedGeneration: policy.Generation})
 	_ = r.Status().Update(ctx, policy)
 }
 
-func (r *PolicyAttachmentReconciler) publishTargetResolutionStatus(ctx context.Context, policy *securityv1alpha1.TSZGuardrailPolicy, resolved []ResolvedTarget) error {
+func (r *PolicyAttachmentReconciler) publishTargetResolutionStatus(ctx context.Context, policy *securityv1beta1.TSZGuardrailPolicy, resolved []ResolvedTarget) error {
 	original := policy.DeepCopy().Status
 	policy.Status.ObservedGeneration = policy.Generation
-	securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-		Type: securityv1alpha1.ConditionAccepted, Status: metav1.ConditionTrue,
-		Reason: securityv1alpha1.ReasonValid, Message: "policy spec accepted", ObservedGeneration: policy.Generation,
+	securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+		Type: securityv1beta1.ConditionAccepted, Status: metav1.ConditionTrue,
+		Reason: securityv1beta1.ReasonValid, Message: "policy spec accepted", ObservedGeneration: policy.Generation,
 	})
 
 	allResolved := true
-	statuses := make([]securityv1alpha1.TargetRefStatus, 0, len(resolved))
+	statuses := make([]securityv1beta1.TargetRefStatus, 0, len(resolved))
 	for _, target := range resolved {
-		status := securityv1alpha1.TargetRefStatus{TargetRef: target.Ref}
-		condition := metav1.Condition{Type: securityv1alpha1.ConditionResolvedRefs, ObservedGeneration: policy.Generation}
+		status := securityv1beta1.TargetRefStatus{TargetRef: target.Ref}
+		condition := metav1.Condition{Type: securityv1beta1.ConditionResolvedRefs, ObservedGeneration: policy.Generation}
 		if target.Err != nil || !target.SectionOK {
 			allResolved = false
-			condition.Status, condition.Reason = metav1.ConditionFalse, securityv1alpha1.ReasonInvalidTarget
+			condition.Status, condition.Reason = metav1.ConditionFalse, securityv1beta1.ReasonInvalidTarget
 			if target.Err != nil {
 				condition.Message = target.Err.Error()
 			} else {
 				condition.Message = "target section does not exist"
 			}
 		} else {
-			condition.Status, condition.Reason, condition.Message = metav1.ConditionTrue, securityv1alpha1.ReasonResolved, "target reference resolved"
+			condition.Status, condition.Reason, condition.Message = metav1.ConditionTrue, securityv1beta1.ReasonResolved, "target reference resolved"
 		}
-		securityv1alpha1.SetStatusCondition(&status.Conditions, condition)
+		securityv1beta1.SetStatusCondition(&status.Conditions, condition)
 		statuses = append(statuses, status)
 	}
 	policy.Status.TargetRefStatuses = statuses
-	resolvedCondition := metav1.Condition{Type: securityv1alpha1.ConditionResolvedRefs, ObservedGeneration: policy.Generation}
+	resolvedCondition := metav1.Condition{Type: securityv1beta1.ConditionResolvedRefs, ObservedGeneration: policy.Generation}
 	if allResolved {
-		resolvedCondition.Status, resolvedCondition.Reason, resolvedCondition.Message = metav1.ConditionTrue, securityv1alpha1.ReasonResolved, "all target references resolved"
+		resolvedCondition.Status, resolvedCondition.Reason, resolvedCondition.Message = metav1.ConditionTrue, securityv1beta1.ReasonResolved, "all target references resolved"
 	} else {
-		resolvedCondition.Status, resolvedCondition.Reason, resolvedCondition.Message = metav1.ConditionFalse, securityv1alpha1.ReasonInvalidTarget, "one or more target references are invalid"
+		resolvedCondition.Status, resolvedCondition.Reason, resolvedCondition.Message = metav1.ConditionFalse, securityv1beta1.ReasonInvalidTarget, "one or more target references are invalid"
 	}
-	securityv1alpha1.SetStatusCondition(&policy.Status.Conditions, resolvedCondition)
+	securityv1beta1.SetStatusCondition(&policy.Status.Conditions, resolvedCondition)
 
 	if reflect.DeepEqual(original, policy.Status) {
 		return nil
@@ -521,15 +521,15 @@ func (r *PolicyAttachmentReconciler) publishTargetResolutionStatus(ctx context.C
 
 // SetupWithManager configures indexed watches for every supported target kind.
 func (r *PolicyAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &securityv1alpha1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues); err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues); err != nil {
 		return fmt.Errorf("index TSZGuardrailPolicy target refs: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&securityv1alpha1.TSZGuardrailPolicy{}).
+		For(&securityv1beta1.TSZGuardrailPolicy{}).
 		// A policy addition, edit, or deletion can turn every sibling targeting
 		// the same Gateway API object into (or out of) a conflict.
-		Watches(&securityv1alpha1.TSZGuardrailPolicy{}, handler.EnqueueRequestsFromMapFunc(r.policiesSharingTargetRefs)).
+		Watches(&securityv1beta1.TSZGuardrailPolicy{}, handler.EnqueueRequestsFromMapFunc(r.policiesSharingTargetRefs)).
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingGateway)).
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingHTTPRoute)).
 		Watches(&gatewayv1.GRPCRoute{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingGRPCRoute)).
@@ -538,13 +538,13 @@ func (r *PolicyAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *PolicyAttachmentReconciler) policiesSharingTargetRefs(ctx context.Context, object client.Object) []reconcile.Request {
-	policy, ok := object.(*securityv1alpha1.TSZGuardrailPolicy)
+	policy, ok := object.(*securityv1beta1.TSZGuardrailPolicy)
 	if !ok {
 		return nil
 	}
 	requests := map[types.NamespacedName]struct{}{}
 	for _, ref := range policy.Spec.TargetRefs {
-		policies := &securityv1alpha1.TSZGuardrailPolicyList{}
+		policies := &securityv1beta1.TSZGuardrailPolicyList{}
 		key := targetRefKey(string(ref.Group), string(ref.Kind), string(ref.Name))
 		if err := r.List(ctx, policies, client.InNamespace(policy.Namespace), client.MatchingFields{targetRefIndex: key}); err != nil {
 			log.FromContext(ctx).Error(err, "list policies sharing target reference", "namespace", policy.Namespace, "name", policy.Name)
@@ -574,7 +574,7 @@ func (r *PolicyAttachmentReconciler) policiesTargetingGRPCRoute(ctx context.Cont
 }
 
 func (r *PolicyAttachmentReconciler) policiesTargeting(ctx context.Context, object client.Object, kind string) []reconcile.Request {
-	policies := &securityv1alpha1.TSZGuardrailPolicyList{}
+	policies := &securityv1beta1.TSZGuardrailPolicyList{}
 	key := targetRefKey(gatewayAPIGroup, kind, object.GetName())
 	if err := r.List(ctx, policies, client.InNamespace(object.GetNamespace()), client.MatchingFields{targetRefIndex: key}); err != nil {
 		log.FromContext(ctx).Error(err, "list policies targeting Gateway API object", "kind", kind, "namespace", object.GetNamespace(), "name", object.GetName())
@@ -589,7 +589,7 @@ func (r *PolicyAttachmentReconciler) policiesTargeting(ctx context.Context, obje
 }
 
 func targetRefIndexValues(object client.Object) []string {
-	policy, ok := object.(*securityv1alpha1.TSZGuardrailPolicy)
+	policy, ok := object.(*securityv1beta1.TSZGuardrailPolicy)
 	if !ok {
 		return nil
 	}

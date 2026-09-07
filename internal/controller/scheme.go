@@ -8,6 +8,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	securityv1alpha1 "thyris-sz/api/v1alpha1"
+	securityv1beta1 "thyris-sz/api/v1beta1"
 )
 
 // NewScheme returns the runtime scheme shared by the controller manager and
@@ -17,6 +18,8 @@ func NewScheme() (*runtime.Scheme, error) {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(egv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(securityv1beta1.AddToScheme(scheme))
 	utilruntime.Must(securityv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(scheme.SetVersionPriority(securityv1beta1.GroupVersion, securityv1alpha1.GroupVersion))
 	return scheme, nil
 }
