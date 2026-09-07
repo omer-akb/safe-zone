@@ -13,6 +13,7 @@ import (
 	"thyris-sz/internal/controller"
 	"thyris-sz/internal/controller/effectivepolicy"
 	"thyris-sz/internal/controller/envoyresource"
+	"thyris-sz/internal/controller/nativeadapter"
 	"thyris-sz/internal/extproc/policy"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -31,7 +32,7 @@ func TestReconcileWritesPolicyNotFoundInsteadOfProgrammingRoute(t *testing.T) {
 	version := int32(1)
 	object := &securityv1beta1.TSZGuardrailPolicy{ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "apps"}, Spec: securityv1beta1.TSZGuardrailPolicySpec{PolicySource: securityv1beta1.PolicySourcePostgresRef, PolicyRef: &securityv1beta1.PolicyReference{Name: "does-not-exist", Version: &version}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithObjects(object).Build()
-	r := NewPolicyAttachmentReconciler(c, staticTargets{}, selector{}, &effectivepolicy.ReferenceResolver{Repo: missingRepository{}}, nil, &recordingEnvoy{})
+	r := NewPolicyAttachmentReconciler(c, staticTargets{}, selector{}, &effectivepolicy.ReferenceResolver{Repo: missingRepository{}}, nil, testRegistry(t, &recordingEnvoy{}))
 	if _, err := r.Reconcile(context.Background(), request(object)); !errors.Is(err, policy.ErrNotFound) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -61,7 +62,7 @@ func TestReconcilePublishesPolicySyncedForResolvedPostgresReference(t *testing.T
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithIndex(&securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(object).Build()
 	target := ResolvedTarget{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}}, SectionOK: true}
 	envoy := &recordingEnvoy{}
-	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, &effectivepolicy.ReferenceResolver{Repo: resolvedReferenceRepository{snapshot: policy.PolicySnapshot{Version: intPointer(4), Status: policy.StatusActive}}}, nil, envoy)
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, &effectivepolicy.ReferenceResolver{Repo: resolvedReferenceRepository{snapshot: policy.PolicySnapshot{Version: intPointer(4), Status: policy.StatusActive}}}, nil, testRegistry(t, envoy))
 	if _, err := r.Reconcile(context.Background(), request(object)); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestReconcileUsesRouteOverGatewayCandidate(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(gatewayPolicy, routePolicy).WithIndex(&securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(gatewayPolicy, routePolicy).Build()
 	targetObject := &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}, Spec: gatewayv1.HTTPRouteSpec{CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: gatewayName}}}}}
 	envoy := &recordingEnvoy{}
-	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: routePolicy.Spec.TargetRefs[0], Object: targetObject, SectionOK: true}}}, selector{}, nil, nil, envoy)
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: routePolicy.Spec.TargetRefs[0], Object: targetObject, SectionOK: true}}}, selector{}, nil, nil, testRegistry(t, envoy))
 	if _, err := r.Reconcile(context.Background(), request(routePolicy)); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -100,7 +101,7 @@ func TestReconcileSameLevelConflictProgramsNeitherPolicy(t *testing.T) {
 	envoy := &recordingEnvoy{}
 	targets := staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: first.Spec.TargetRefs[0], Object: targetObject, SectionOK: true}}}
 	for _, object := range []*securityv1beta1.TSZGuardrailPolicy{first, second} {
-		r := NewPolicyAttachmentReconciler(c, targets, selector{}, nil, nil, envoy)
+		r := NewPolicyAttachmentReconciler(c, targets, selector{}, nil, nil, testRegistry(t, envoy))
 		if _, err := r.Reconcile(context.Background(), request(object)); err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +129,7 @@ func TestReconcileDifferentRouteSectionsDoNotConflict(t *testing.T) {
 	envoy := &recordingEnvoy{}
 	for _, object := range []*securityv1beta1.TSZGuardrailPolicy{first, second} {
 		target := ResolvedTarget{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: route, SectionOK: true}
-		r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, nil, nil, envoy)
+		r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, nil, nil, testRegistry(t, envoy))
 		if _, err := r.Reconcile(context.Background(), request(object)); err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +142,7 @@ func TestReconcileDifferentRouteSectionsDoNotConflict(t *testing.T) {
 func TestNativeRouteIdentityUsesEnvoyGatewayRuleIndex(t *testing.T) {
 	firstSection, secondSection := gatewayv1.SectionName("checkout"), gatewayv1.SectionName("refund")
 	route := &gatewayv1.HTTPRoute{Spec: gatewayv1.HTTPRouteSpec{Rules: []gatewayv1.HTTPRouteRule{{Name: &firstSection}, {Name: &secondSection}}}}
-	identity := nativeRouteIdentity(ResolvedTarget{Kind: "HTTPRoute", Ref: target("HTTPRoute", "orders", &secondSection), Object: route})
+	identity := (&envoyresource.EnvoyResourceReconciler{}).RouteIdentity(target("HTTPRoute", "orders", &secondSection), route)
 	if identity.Route != "orders" || identity.Rule != "1" {
 		t.Fatalf("native route identity = %+v, want route orders and rule index 1", identity)
 	}
@@ -155,7 +156,7 @@ func TestReconcileAcceptsWindowedStreamingCapability(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithIndex(&securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(object).Build()
 	envoy := &recordingEnvoy{}
 	target := ResolvedTarget{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{}, SectionOK: true}
-	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, nil, nil, envoy)
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{target}}, selector{}, nil, nil, testRegistry(t, envoy))
 	if _, err := r.Reconcile(context.Background(), request(object)); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestReconcileCompileFailureKeepsLastKnownGoodProgrammed(t *testing.T) {
 	object := compilingInlinePolicy("last-known-good", target("HTTPRoute", routeName, nil))
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithIndex(&securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(object).Build()
 	envoy := &recordingEnvoy{calls: 1} // represents the previously programmed child resource
-	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}}, SectionOK: true}}}, selector{}, nil, &effectivepolicy.Compiler{}, envoy)
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}}, SectionOK: true}}}, selector{}, nil, &effectivepolicy.Compiler{}, testRegistry(t, envoy))
 
 	result, err := r.Reconcile(context.Background(), request(object))
 	if err != nil {
@@ -268,7 +269,7 @@ func TestReconcileInlinePolicyIsIdempotentAgainstPostgres(t *testing.T) {
 	routeName := gatewayv1.ObjectName("orders")
 	object := compilingInlinePolicy("inline", target("HTTPRoute", routeName, nil))
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(object).WithIndex(&securityv1beta1.TSZGuardrailPolicy{}, targetRefIndex, targetRefIndexValues).WithObjects(object).Build()
-	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}}, SectionOK: true}}}, selector{}, nil, &effectivepolicy.Compiler{Repo: repo, Compiler: compiler, Activator: activator}, &recordingEnvoy{})
+	r := NewPolicyAttachmentReconciler(c, staticTargets{targets: []ResolvedTarget{{Kind: "HTTPRoute", Ref: object.Spec.TargetRefs[0], Object: &gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "apps"}}, SectionOK: true}}}, selector{}, nil, &effectivepolicy.Compiler{Repo: repo, Compiler: compiler, Activator: activator}, testRegistry(t, &recordingEnvoy{}))
 	if _, err := r.Reconcile(ctx, request(object)); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
@@ -328,9 +329,12 @@ func (missingRepository) PolicyByName(context.Context, string, *string) (policy.
 	return policy.Policy{}, policy.ErrNotFound
 }
 
-type recordingEnvoy struct{ calls int }
+type recordingEnvoy struct {
+	envoyresource.EnvoyResourceReconciler
+	calls int
+}
 
-func (r *recordingEnvoy) ReconcileExtensionPolicy(context.Context, *securityv1beta1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, envoyresource.EffectivePolicy) (controllerutil.OperationResult, error) {
+func (r *recordingEnvoy) Reconcile(context.Context, *securityv1beta1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, envoyresource.EffectivePolicy) (controllerutil.OperationResult, error) {
 	r.calls++
 	return controllerutil.OperationResultCreated, nil
 }
@@ -378,4 +382,17 @@ type activationPublisher struct{}
 
 func (activationPublisher) PublishActivation(context.Context, policy.ActivationEvent) error {
 	return nil
+}
+
+func (r *recordingEnvoy) ManagedResourceCount(context.Context) (int, error) { return 0, nil }
+func (r *recordingEnvoy) Remove(context.Context, *securityv1beta1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName) error {
+	return nil
+}
+func testRegistry(t *testing.T, adapters ...nativeadapter.Adapter) *nativeadapter.Registry {
+	t.Helper()
+	registry, err := nativeadapter.NewRegistry(adapters...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }

@@ -5,10 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	securityv1beta1 "thyris-sz/api/v1beta1"
+	"thyris-sz/internal/controller/nativeadapter"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,10 +23,7 @@ const managedByLabel = "security.thyris.ai/managed-by"
 
 // EffectivePolicy contains the data-plane settings already validated against
 // the effective immutable snapshot.
-type EffectivePolicy struct {
-	ProcessingTimeout time.Duration
-	FailOpen          bool
-}
+type EffectivePolicy = nativeadapter.EffectivePolicy
 
 // EnvoyResourceReconciler owns generated Envoy Gateway resources.
 type EnvoyResourceReconciler struct {

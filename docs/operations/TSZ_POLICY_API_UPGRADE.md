@@ -25,13 +25,24 @@ and Gateway API types keep their own independent versions. TSZ policy snapshot
 versions in PostgreSQL, policy identity, target precedence, finalizers and
 runtime enforcement are unaffected by the API representation change.
 
+## Additive native adapter selection
+
+The subsequent Phase 6 native-adapter change adds optional `spec.adapter` to both
+served versions with default `envoy-gateway` and an immutable-field validation.
+All pre-existing fields and their defaults remain unchanged. Alpha/beta conversion
+remains lossless. Upgrade the CRD before the controller; the API-server upgrade
+test verifies that stored alpha policies acquire the Envoy default on read.
+Only Envoy is registered in the shipped binary. Older controllers must not manage
+future non-Envoy policies because they do not understand the selector. See
+[native gateway adapters](../integrations/NATIVE_GATEWAY_ADAPTERS.md).
+
 ## Compatibility evidence and adopter feedback
 
 Evidence recorded for the beta implementation on 2026-09-07:
 
 | Evidence | Result and limitation |
 | --- | --- |
-| Frozen alpha schema from commit `62d03c7` | `api/testdata/v1alpha1-crd.yaml` is compared against both generated schemas, defaults, validation, status and printer columns. Do not regenerate this baseline. |
+| Frozen alpha schema from commit `62d03c7` | `api/testdata/v1alpha1-crd.yaml` is compared against both generated schemas, defaults, validation, status and printer columns, excluding only the explicit additive `spec.adapter` selector. Do not regenerate this baseline. |
 | Kubernetes API server + etcd, envtest `1.35.0` | Automated in-place upgrade from the frozen CRD; alpha/beta reads, writes, status, defaults, invalid inputs, controller reference-failure reporting and storage rewrite/alpha client rollback are tested. |
 | Existing controller behavior | Beta controller runs the existing policy resolution, precedence, conflict, compilation and last-known-good unit tests. An alpha-owned Envoy attachment keeps its UID and deterministic name when reconciled by beta. |
 | Reference deployment | Kubernetes `1.35.5`, Envoy Gateway `1.8.3`, Gateway API `1.5.1` are pinned by the repository. The API-server tests above do not substitute for an end-to-end rollout through this complete stack. |

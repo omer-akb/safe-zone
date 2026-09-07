@@ -5,16 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
-	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	securityv1beta1 "thyris-sz/api/v1beta1"
 	"thyris-sz/internal/controller/capabilities"
 	"thyris-sz/internal/controller/controllermetrics"
 	"thyris-sz/internal/controller/effectivepolicy"
-	"thyris-sz/internal/controller/envoyresource"
+	"thyris-sz/internal/controller/nativeadapter"
 	extprocpolicy "thyris-sz/internal/extproc/policy"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,25 +31,22 @@ const (
 	targetRefIndex                = ".spec.targetRefs"
 	policyAttachmentFinalizer     = "security.thyris.ai/tsz-guardrail-policy-cleanup"
 	activationNotificationPending = "activation committed, notification pending"
-	managedExtensionPolicyLabel   = "security.thyris.ai/managed-by"
 )
 
 // +kubebuilder:rbac:groups=security.thyris.ai,resources=tszguardrailpolicies,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=security.thyris.ai,resources=tszguardrailpolicies/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=envoyextensionpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes;grpcroutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
 
-// PolicyAttachmentReconciler reconciles TSZ policy attachments. Subsequent
-// phases add policy resolution, effective-policy compilation, and status
-// updates; this phase establishes target resolution and event fan-out.
+// PolicyAttachmentReconciler resolves, compiles and programs policy attachments
+// through explicitly registered native gateway adapters.
 type PolicyAttachmentReconciler struct {
 	client.Client
 	targetResolver    TargetResolver
 	precedence        PrecedenceSelector
 	referenceResolver *effectivepolicy.ReferenceResolver
 	effectiveCompiler *effectivepolicy.Compiler
-	envoyReconciler   EnvoyReconciler
+	adapters          *nativeadapter.Registry
 	ownershipTracker  OwnershipTracker
 	routeBindings     RouteBindingStore
 }
@@ -62,9 +57,7 @@ type TargetResolver interface {
 type PrecedenceSelector interface {
 	Select([]effectivepolicy.Candidate) (effectivepolicy.Candidate, *effectivepolicy.ConflictError)
 }
-type EnvoyReconciler interface {
-	ReconcileExtensionPolicy(context.Context, *securityv1beta1.TSZGuardrailPolicy, gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName, envoyresource.EffectivePolicy) (controllerutil.OperationResult, error)
-}
+
 type OwnershipTracker interface {
 	ClaimOwnership(context.Context, string, *string, string, string) error
 	ReleaseOwnership(context.Context, string, *string, string, string) error
@@ -74,8 +67,8 @@ type RouteBindingStore interface {
 	DeleteRoutePolicy(context.Context, extprocpolicy.RouteIdentity) error
 }
 
-func NewPolicyAttachmentReconciler(c client.Client, targets TargetResolver, precedence PrecedenceSelector, references *effectivepolicy.ReferenceResolver, compiler *effectivepolicy.Compiler, envoy EnvoyReconciler, ownership ...OwnershipTracker) *PolicyAttachmentReconciler {
-	reconciler := &PolicyAttachmentReconciler{Client: c, targetResolver: targets, precedence: precedence, referenceResolver: references, effectiveCompiler: compiler, envoyReconciler: envoy}
+func NewPolicyAttachmentReconciler(c client.Client, targets TargetResolver, precedence PrecedenceSelector, references *effectivepolicy.ReferenceResolver, compiler *effectivepolicy.Compiler, adapters *nativeadapter.Registry, ownership ...OwnershipTracker) *PolicyAttachmentReconciler {
+	reconciler := &PolicyAttachmentReconciler{Client: c, targetResolver: targets, precedence: precedence, referenceResolver: references, effectiveCompiler: compiler, adapters: adapters}
 	if len(ownership) > 0 {
 		reconciler.ownershipTracker = ownership[0]
 	}
@@ -99,7 +92,7 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			outcome = "requeue"
 		}
 		controllermetrics.ObserveReconcile("tszguardrailpolicy", outcome, time.Since(started))
-		r.recordManagedExtensionPolicies(ctx)
+		r.recordManagedResources(ctx)
 	}()
 	policy := &securityv1beta1.TSZGuardrailPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
@@ -114,21 +107,30 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, fmt.Errorf("add policy attachment finalizer: %w", err)
 		}
 	}
-	if err := capabilities.CheckCapabilities(policy.Spec, capabilities.EnvoyGatewayCapabilities); err != nil {
-		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonUnsupportedCapability, Message: err.Error(), ObservedGeneration: policy.Generation})
-		if updateErr := r.Status().Update(ctx, policy); updateErr != nil {
-			return ctrl.Result{}, fmt.Errorf("update unsupported capability status: %w", updateErr)
+	adapter, err := r.adapters.Get(policy.Spec.AdapterName())
+	if err != nil {
+		return r.unsupportedAdapter(ctx, policy, err)
+	}
+	descriptor := adapter.Descriptor()
+	if err := capabilities.CheckCapabilities(policy.Spec, descriptor.Capabilities); err != nil {
+		return r.unsupportedAdapter(ctx, policy, err)
+	}
+	for _, ref := range policy.Spec.TargetRefs {
+		if err := descriptor.CheckTarget(ref); err != nil {
+			return r.unsupportedAdapter(ctx, policy, err)
 		}
-		return ctrl.Result{}, nil
 	}
 
 	resolved := r.targetResolver.ResolveTargets(ctx, policy)
-	// A failing reference never changes a last-known-good Envoy policy.
+	// A failing reference never changes a last-known-good native policy.
 	if policy.Spec.PolicySource == securityv1beta1.PolicySourcePostgresRef && r.referenceResolver != nil {
 		result := r.referenceResolver.Resolve(ctx, policy.Spec.PolicyRef, nil)
 		if result.Reason != effectivepolicy.ResolutionResolved {
 			r.publishReferenceFailure(ctx, policy, result)
 			return ctrl.Result{}, result.Err
+		}
+		if err := capabilities.CheckDefinition(result.Snapshot.Definition, descriptor.Capabilities); err != nil {
+			return r.unsupportedAdapter(ctx, policy, err)
 		}
 		if result.Snapshot.Version != nil {
 			version := *result.Snapshot.Version
@@ -137,74 +139,75 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		policy.Status.EffectivePolicyID = policy.Spec.PolicyRef.Name
 		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonSnapshotActive, Message: "referenced immutable policy snapshot resolved", ObservedGeneration: policy.Generation})
 	}
-	if r.envoyReconciler != nil {
-		for _, target := range resolved {
-			if target.Err != nil || !target.SectionOK {
-				continue
-			}
-			candidates, err := r.candidatesForTarget(ctx, policy, target)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			winner, conflict := r.precedence.Select(candidates)
-			if conflict != nil {
-				controllermetrics.IncEffectivePolicyConflict()
-				if err := r.removeOwnedExtensionPolicy(ctx, policy, target); err != nil {
-					return ctrl.Result{}, err
-				}
-				r.publishConflict(ctx, policy, conflict)
-				continue
-			}
-			if winner.ID != policyIdentity(policy) {
-				continue
-			}
-			if policy.Spec.PolicySource == securityv1beta1.PolicySourceInline && r.effectiveCompiler != nil {
-				dbPolicyName := effectivepolicy.InlinePolicyName(policy.Namespace, policy.Name, targetKey(target))
-				definition, err := effectivepolicy.ToPolicyDefinition(policy.Spec, policyScope(target))
-				if err != nil {
-					return r.lastKnownGoodFailure(ctx, policy, err)
-				}
-				snapshot, changed, err := r.effectiveCompiler.EnsureCompiledAndActive(ctx, dbPolicyName, definition)
-				if err != nil {
-					var publishErr *extprocpolicy.ActivationPublishError
-					if errors.As(err, &publishErr) {
-						controllermetrics.IncPolicyActivation("notification_pending")
-						return r.activationNotificationPending(ctx, policy, publishErr)
-					}
-					controllermetrics.IncPolicyActivation("failed")
-					return r.lastKnownGoodFailure(ctx, policy, err)
-				}
-				if changed {
-					controllermetrics.IncPolicyActivation("success")
-				}
-				if isActivationNotificationPending(policy) {
-					if err := r.effectiveCompiler.RepublishActivation(ctx, dbPolicyName, definition.Scope.Tenant); err != nil {
-						return r.activationNotificationPending(ctx, policy, err)
-					}
-				}
-				if r.ownershipTracker != nil {
-					if err := r.ownershipTracker.ClaimOwnership(ctx, dbPolicyName, definition.Scope.Tenant, policy.Namespace, policy.Name); err != nil {
-						return r.ownershipUnavailable(ctx, policy, err)
-					}
-				}
-				if snapshot.Version != nil {
-					version := *snapshot.Version
-					policy.Status.PolicyVersion = &version
-				}
-				policy.Status.EffectivePolicyID = dbPolicyName
-				if r.routeBindings != nil {
-					if err := r.routeBindings.UpsertRoutePolicy(ctx, nativeRouteIdentity(target), extprocpolicy.RoutePolicyBinding{PolicyID: dbPolicyName}); err != nil {
-						return r.ownershipUnavailable(ctx, policy, err)
-					}
-				}
-				securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonSnapshotActive, Message: "activation published; per-replica confirmation not yet implemented", ObservedGeneration: policy.Generation})
-			}
-			_, err = r.envoyReconciler.ReconcileExtensionPolicy(ctx, policy, target.Ref, envoyresource.EffectivePolicy{ProcessingTimeout: policy.Spec.ProcessingTimeoutOrDefault(), FailOpen: policy.Spec.FailOpen()})
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonExtProcConfigured, Message: "EnvoyExtensionPolicy reconciled", ObservedGeneration: policy.Generation})
+	for _, target := range resolved {
+		if target.Err != nil || !target.SectionOK {
+			continue
 		}
+		candidates, err := r.candidatesForTarget(ctx, policy, target)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		winner, conflict := r.precedence.Select(candidates)
+		if conflict != nil {
+			controllermetrics.IncEffectivePolicyConflict()
+			if err := adapter.Remove(ctx, policy, target.Ref); err != nil {
+				return ctrl.Result{}, err
+			}
+			r.publishConflict(ctx, policy, conflict)
+			continue
+		}
+		if winner.ID != policyIdentity(policy) {
+			continue
+		}
+		if policy.Spec.PolicySource == securityv1beta1.PolicySourceInline && r.effectiveCompiler != nil {
+			dbPolicyName := effectivepolicy.InlinePolicyName(policy.Namespace, policy.Name, targetKey(target))
+			definition, err := effectivepolicy.ToPolicyDefinition(policy.Spec, policyScope(target))
+			if err != nil {
+				return r.lastKnownGoodFailure(ctx, policy, descriptor, err)
+			}
+			if err := capabilities.CheckDefinition(definition, descriptor.Capabilities); err != nil {
+				return r.unsupportedAdapter(ctx, policy, err)
+			}
+			snapshot, changed, err := r.effectiveCompiler.EnsureCompiledAndActive(ctx, dbPolicyName, definition)
+			if err != nil {
+				var publishErr *extprocpolicy.ActivationPublishError
+				if errors.As(err, &publishErr) {
+					controllermetrics.IncPolicyActivation("notification_pending")
+					return r.activationNotificationPending(ctx, policy, publishErr)
+				}
+				controllermetrics.IncPolicyActivation("failed")
+				return r.lastKnownGoodFailure(ctx, policy, descriptor, err)
+			}
+			if changed {
+				controllermetrics.IncPolicyActivation("success")
+			}
+			if isActivationNotificationPending(policy) {
+				if err := r.effectiveCompiler.RepublishActivation(ctx, dbPolicyName, definition.Scope.Tenant); err != nil {
+					return r.activationNotificationPending(ctx, policy, err)
+				}
+			}
+			if r.ownershipTracker != nil {
+				if err := r.ownershipTracker.ClaimOwnership(ctx, dbPolicyName, definition.Scope.Tenant, policy.Namespace, policy.Name); err != nil {
+					return r.ownershipUnavailable(ctx, policy, err)
+				}
+			}
+			if snapshot.Version != nil {
+				version := *snapshot.Version
+				policy.Status.PolicyVersion = &version
+			}
+			policy.Status.EffectivePolicyID = dbPolicyName
+			if r.routeBindings != nil {
+				if err := r.routeBindings.UpsertRoutePolicy(ctx, adapter.RouteIdentity(target.Ref, target.Object), extprocpolicy.RoutePolicyBinding{PolicyID: dbPolicyName}); err != nil {
+					return r.ownershipUnavailable(ctx, policy, err)
+				}
+			}
+			securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonSnapshotActive, Message: "activation published; per-replica confirmation not yet implemented", ObservedGeneration: policy.Generation})
+		}
+		_, err = adapter.Reconcile(ctx, policy, target.Ref, nativeadapter.EffectivePolicy{ProcessingTimeout: policy.Spec.ProcessingTimeoutOrDefault(), FailOpen: policy.Spec.FailOpen()})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: descriptor.ProgrammedReason, Message: descriptor.ResourceKind + " reconciled", ObservedGeneration: policy.Generation})
 	}
 	if err := r.publishTargetResolutionStatus(ctx, policy, resolved); err != nil {
 		return ctrl.Result{}, err
@@ -212,56 +215,12 @@ func (r *PolicyAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return ctrl.Result{}, nil
 }
 
-func nativeRouteIdentity(target ResolvedTarget) extprocpolicy.RouteIdentity {
-	identity := extprocpolicy.RouteIdentity{}
-	if target.Kind == "Gateway" {
-		identity.Gateway = string(target.Ref.Name)
-		if target.Ref.SectionName != nil {
-			identity.Listener = string(*target.Ref.SectionName)
-		}
-	} else {
-		identity.Route = string(target.Ref.Name)
-		if route, ok := target.Object.(*gatewayv1.HTTPRoute); ok && len(route.Spec.ParentRefs) > 0 {
-			identity.Gateway = string(route.Spec.ParentRefs[0].Name)
-		}
-		if target.Ref.SectionName != nil {
-			identity.Rule = routeRuleIndex(target.Object, *target.Ref.SectionName)
+func (r *PolicyAttachmentReconciler) recordManagedResources(ctx context.Context) {
+	for _, adapter := range r.adapters.All() {
+		if count, err := adapter.ManagedResourceCount(ctx); err == nil {
+			controllermetrics.SetManagedAdapterResources(adapter.Descriptor().Capabilities.Name, count)
 		}
 	}
-	return identity
-}
-
-// routeRuleIndex translates the Gateway API rule section name to the stable
-// rule index used in Envoy Gateway's xds.route_name, for example
-// httproute/<namespace>/<route>/rule/0/match/0/*. A section is already
-// validated by Resolver before this function is reached.
-func routeRuleIndex(object client.Object, section gatewayv1.SectionName) string {
-	switch route := object.(type) {
-	case *gatewayv1.HTTPRoute:
-		for index, rule := range route.Spec.Rules {
-			if rule.Name != nil && *rule.Name == section {
-				return strconv.Itoa(index)
-			}
-		}
-	case *gatewayv1.GRPCRoute:
-		for index, rule := range route.Spec.Rules {
-			if rule.Name != nil && *rule.Name == section {
-				return strconv.Itoa(index)
-			}
-		}
-	}
-	return ""
-}
-
-func (r *PolicyAttachmentReconciler) recordManagedExtensionPolicies(ctx context.Context) {
-	if r.Client == nil {
-		return
-	}
-	resources := &egv1alpha1.EnvoyExtensionPolicyList{}
-	if err := r.List(ctx, resources, client.MatchingLabels{managedExtensionPolicyLabel: "tsz-controller"}); err != nil {
-		return
-	}
-	controllermetrics.SetManagedExtensionPolicies(len(resources.Items))
 }
 
 func (r *PolicyAttachmentReconciler) candidatesForTarget(ctx context.Context, current *securityv1beta1.TSZGuardrailPolicy, target ResolvedTarget) ([]effectivepolicy.Candidate, error) {
@@ -298,6 +257,9 @@ func (r *PolicyAttachmentReconciler) candidatesForTarget(ctx context.Context, cu
 		}
 		for index := range policies.Items {
 			candidatePolicy := &policies.Items[index]
+			if candidatePolicy.Spec.AdapterName() != current.Spec.AdapterName() || !candidatePolicy.DeletionTimestamp.IsZero() {
+				continue
+			}
 			for _, ref := range candidatePolicy.Spec.TargetRefs {
 				if !candidateRefApplies(target, ref, listenerNames) {
 					continue
@@ -360,31 +322,11 @@ func (r *PolicyAttachmentReconciler) publishConflict(ctx context.Context, object
 	}
 }
 
-// removeOwnedExtensionPolicy withdraws a configuration only when this CRD is
-// its controller owner. A same-level conflict is an explicit safety rejection,
-// not a compilation failure, so no conflicted policy may remain programmed.
-func (r *PolicyAttachmentReconciler) removeOwnedExtensionPolicy(ctx context.Context, owner *securityv1beta1.TSZGuardrailPolicy, target ResolvedTarget) error {
-	resource := &egv1alpha1.EnvoyExtensionPolicy{}
-	key := types.NamespacedName{Namespace: owner.Namespace, Name: envoyresource.DeterministicName(target.Ref)}
-	if err := r.Get(ctx, key, resource); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	for _, reference := range resource.OwnerReferences {
-		if reference.Controller != nil && *reference.Controller && reference.UID == owner.UID {
-			if err := r.Delete(ctx, resource); err != nil {
-				return fmt.Errorf("delete conflicted EnvoyExtensionPolicy %s/%s: %w", key.Namespace, key.Name, err)
-			}
-			return nil
-		}
-	}
-	return nil
-}
-
-func (r *PolicyAttachmentReconciler) lastKnownGoodFailure(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
+func (r *PolicyAttachmentReconciler) lastKnownGoodFailure(ctx context.Context, object *securityv1beta1.TSZGuardrailPolicy, descriptor nativeadapter.Descriptor, err error) (ctrl.Result, error) {
 	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionPolicySynced, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonSnapshotRejected, Message: err.Error(), ObservedGeneration: object.Generation})
-	// No EnvoyExtensionPolicy operation is attempted here. Any existing child
+	// No native resource operation is attempted here. Any existing child
 	// remains the last known good configuration while the update is retried.
-	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: securityv1beta1.ReasonExtProcConfigured, Message: "last known good EnvoyExtensionPolicy remains programmed", ObservedGeneration: object.Generation})
+	securityv1beta1.SetStatusCondition(&object.Status.Conditions, metav1.Condition{Type: securityv1beta1.ConditionProgrammed, Status: metav1.ConditionTrue, Reason: descriptor.ProgrammedReason, Message: "last known good " + descriptor.ResourceKind + " remains programmed", ObservedGeneration: object.Generation})
 	if updateErr := r.Status().Update(ctx, object); updateErr != nil {
 		return ctrl.Result{}, fmt.Errorf("update last-known-good status: %w", updateErr)
 	}
@@ -431,7 +373,7 @@ func (r *PolicyAttachmentReconciler) handleDeletion(ctx context.Context, object 
 			}
 		}
 	}
-	// Child EnvoyExtensionPolicies are deliberately not deleted here: their
+	// Child native resources are deliberately not deleted here: their
 	// controller owner reference lets Kubernetes garbage collection remove them.
 	controllerutil.RemoveFinalizer(object, policyAttachmentFinalizer)
 	if err := r.Update(ctx, object); err != nil {
@@ -525,16 +467,20 @@ func (r *PolicyAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index TSZGuardrailPolicy target refs: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&securityv1beta1.TSZGuardrailPolicy{}).
 		// A policy addition, edit, or deletion can turn every sibling targeting
 		// the same Gateway API object into (or out of) a conflict.
 		Watches(&securityv1beta1.TSZGuardrailPolicy{}, handler.EnqueueRequestsFromMapFunc(r.policiesSharingTargetRefs)).
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingGateway)).
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingHTTPRoute)).
-		Watches(&gatewayv1.GRPCRoute{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingGRPCRoute)).
-		Owns(&egv1alpha1.EnvoyExtensionPolicy{}).
-		Complete(r)
+		Watches(&gatewayv1.GRPCRoute{}, handler.EnqueueRequestsFromMapFunc(r.policiesTargetingGRPCRoute))
+	for _, adapter := range r.adapters.All() {
+		for _, object := range adapter.OwnedResources() {
+			builder = builder.Owns(object)
+		}
+	}
+	return builder.Complete(r)
 }
 
 func (r *PolicyAttachmentReconciler) policiesSharingTargetRefs(ctx context.Context, object client.Object) []reconcile.Request {
@@ -602,4 +548,19 @@ func targetRefIndexValues(object client.Object) []string {
 
 func targetRefKey(group, kind, name string) string {
 	return group + "/" + kind + "/" + name
+}
+
+func (r *PolicyAttachmentReconciler) unsupportedAdapter(ctx context.Context, policy *securityv1beta1.TSZGuardrailPolicy, err error) (ctrl.Result, error) {
+	before := policy.DeepCopy().Status
+	policy.Status.ObservedGeneration = policy.Generation
+	for _, kind := range []string{securityv1beta1.ConditionAccepted, securityv1beta1.ConditionProgrammed} {
+		securityv1beta1.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{Type: kind, Status: metav1.ConditionFalse, Reason: securityv1beta1.ReasonUnsupportedCapability, Message: err.Error(), ObservedGeneration: policy.Generation})
+	}
+	if reflect.DeepEqual(before, policy.Status) {
+		return ctrl.Result{}, nil
+	}
+	if updateErr := r.Status().Update(ctx, policy); updateErr != nil {
+		return ctrl.Result{}, fmt.Errorf("update unsupported adapter status: %w", updateErr)
+	}
+	return ctrl.Result{}, nil
 }

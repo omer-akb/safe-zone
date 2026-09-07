@@ -16,6 +16,7 @@ import (
 	controller "thyris-sz/internal/controller"
 	"thyris-sz/internal/controller/effectivepolicy"
 	"thyris-sz/internal/controller/envoyresource"
+	"thyris-sz/internal/controller/nativeadapter"
 	"thyris-sz/internal/controller/policyattach"
 	"thyris-sz/internal/database"
 	"thyris-sz/internal/extproc/policy"
@@ -80,13 +81,18 @@ func main() {
 		log.Fatalf("create controller manager: %v", err)
 	}
 
+	adapters, err := nativeadapter.NewRegistry(&envoyresource.EnvoyResourceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()})
+	if err != nil {
+		log.Fatalf("configure native adapters: %v", err)
+	}
+
 	reconciler := policyattach.NewPolicyAttachmentReconciler(
 		mgr.GetClient(),
 		&policyattach.Resolver{Client: mgr.GetClient()},
 		effectivepolicy.Selector{},
 		&effectivepolicy.ReferenceResolver{Repo: repository},
 		&effectivepolicy.Compiler{Repo: repository, Compiler: compiler, Activator: activator},
-		&envoyresource.EnvoyResourceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()},
+		adapters,
 		ownership,
 	).WithRoutePolicyBindings(bindings)
 	if err := reconciler.SetupWithManager(mgr); err != nil {

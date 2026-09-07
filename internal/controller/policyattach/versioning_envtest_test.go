@@ -117,6 +117,8 @@ func TestEnvtestPolicyVersionUpgrade(t *testing.T) {
 	if err := c.Get(ctx, key, graduated); err != nil {
 		t.Fatal(err)
 	}
+	// The only additive default introduced after graduation is adapter.
+	original.Spec.Adapter = "envoy-gateway"
 	assertPolicyJSONEqual(t, original.Spec, graduated.Spec)
 	assertPolicyJSONEqual(t, original.Status, graduated.Status)
 	if graduated.UID != original.UID || !reflect.DeepEqual(graduated.Finalizers, original.Finalizers) || !reflect.DeepEqual(graduated.Annotations, original.Annotations) || !reflect.DeepEqual(graduated.Labels, original.Labels) {
@@ -172,7 +174,8 @@ func TestEnvtestPolicyVersionUpgrade(t *testing.T) {
 					timeout, _, _ := unstructured.NestedString(read.Object, "spec", "processingTimeout")
 					failure, _, _ := unstructured.NestedString(read.Object, "spec", "failurePolicy", "request")
 					responseFailure, _, _ := unstructured.NestedString(read.Object, "spec", "failurePolicy", "response")
-					if timeout != "2s" || failure != "FailClosed" || responseFailure != "FailClosed" {
+					adapter, _, _ := unstructured.NestedString(read.Object, "spec", "adapter")
+					if adapter != "envoy-gateway" || timeout != "2s" || failure != "FailClosed" || responseFailure != "FailClosed" {
 						t.Fatalf("defaults = %+v", read.Object["spec"])
 					}
 				}
@@ -187,9 +190,26 @@ func TestEnvtestPolicyVersionUpgrade(t *testing.T) {
 					t.Fatalf("invalid policy accepted: %v", err)
 				}
 
+				// Selection is stable for the resource lifetime, including across
+				// API versions, so adapter-owned children cannot be orphaned.
+				changed := object.DeepCopy()
+				if err := unstructured.SetNestedField(changed.Object, "test-gateway", "spec", "adapter"); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Update(ctx, changed); !apierrors.IsInvalid(err) {
+					t.Fatalf("adapter change accepted: %v", err)
+				}
+				selectable := changed.DeepCopy()
+				selectable.SetName("selectable-" + version)
+				selectable.SetResourceVersion("")
+				selectable.SetUID("")
+				if err := c.Create(ctx, selectable); err != nil {
+					t.Fatalf("additional adapter rejected by schema: %v", err)
+				}
+
 				// The beta controller reads a resource created using either endpoint
 				// and publishes status visible through the original client version.
-				reconciler := NewPolicyAttachmentReconciler(c, staticTargets{}, selector{}, missingReferenceResolver(), nil, &recordingEnvoy{})
+				reconciler := NewPolicyAttachmentReconciler(c, staticTargets{}, selector{}, missingReferenceResolver(), nil, testRegistry(t, &recordingEnvoy{}))
 				if _, err := reconciler.Reconcile(ctx, request(object)); err == nil {
 					t.Fatal("missing reference unexpectedly resolved")
 				}

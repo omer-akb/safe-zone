@@ -42,6 +42,9 @@ The documentation set is organized as follows:
 - **Envoy Gateway Integration** – Preview/manual and native/managed installation profiles
   `integrations/ENVOY_GATEWAY.md`
 
+- **Native Gateway Adapters** – Adapter selection, capabilities and controller extension scope
+  [integrations/NATIVE_GATEWAY_ADAPTERS.md](integrations/NATIVE_GATEWAY_ADAPTERS.md)
+
 - **TSZ Policy API Upgrade** – Beta API compatibility, alpha migration, storage rewrite and adopter-feedback gates
   [operations/TSZ_POLICY_API_UPGRADE.md](operations/TSZ_POLICY_API_UPGRADE.md)
 

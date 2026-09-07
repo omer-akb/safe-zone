@@ -59,3 +59,46 @@ func TestBetaControllerRetainsAlphaOwnedEnvoyResource(t *testing.T) {
 		t.Fatal("alpha rollback duplicated or lost ownership")
 	}
 }
+
+func TestNativeRemovalOnlyDeletesControllerOwnedResources(t *testing.T) {
+	for _, scenario := range []string{"owned", "foreign", "unowned"} {
+		t.Run(scenario, func(t *testing.T) {
+			scheme, err := controller.NewScheme()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := &beta.TSZGuardrailPolicy{ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "apps", UID: "owner"}}
+			target := gatewayv1alpha2.LocalPolicyTargetReferenceWithSectionName{LocalPolicyTargetReference: gatewayv1.LocalPolicyTargetReference{Group: gatewayv1.GroupName, Kind: "HTTPRoute", Name: "orders"}}
+			existing := envoyresource.BuildEnvoyExtensionPolicy(owner, target, envoyresource.EffectivePolicy{})
+			existing.UID = "resource-uid"
+			if scenario != "unowned" {
+				controllerOwner := owner.DeepCopy()
+				if scenario == "foreign" {
+					controllerOwner.UID = "another-owner"
+				}
+				if err := ctrl.SetControllerReference(controllerOwner, existing, scheme); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
+			r := &envoyresource.EnvoyResourceReconciler{Client: c, Scheme: scheme}
+			if err := r.Remove(context.Background(), owner, target); err != nil {
+				t.Fatal(err)
+			}
+			remaining := &egv1alpha1.EnvoyExtensionPolicyList{}
+			if err := c.List(context.Background(), remaining); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if scenario == "owned" {
+				want = 0
+			}
+			if len(remaining.Items) != want {
+				t.Fatalf("remaining resources = %d, want %d", len(remaining.Items), want)
+			}
+			if err := r.Remove(context.Background(), owner, target); err != nil {
+				t.Fatalf("idempotent removal: %v", err)
+			}
+		})
+	}
+}

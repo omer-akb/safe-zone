@@ -56,6 +56,17 @@ type TSZGuardrailPolicy struct {
 // TSZGuardrailPolicySpec declares one policy attachment.
 // +kubebuilder:validation:XValidation:rule="self.policySource == 'PostgresRef' ? has(self.policyRef) : has(self.request) && has(self.response)",message="policyRef is required for PostgresRef; request and response are required for Inline"
 type TSZGuardrailPolicySpec struct {
+	// Adapter selects an installed native gateway adapter. Omission preserves
+	// existing Envoy attachments. Recreate the policy to change adapters so
+	// generated resources and runtime ownership cannot be orphaned.
+	// +optional
+	// +kubebuilder:default="envoy-gateway"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="adapter is immutable; recreate the policy to change adapters"
+	Adapter string `json:"adapter,omitempty"`
+
 	// TargetRefs identifies the Gateway API resources to which this attachment applies.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:XValidation:rule="self.all(ref, ref.group == 'gateway.networking.k8s.io' && ref.kind in ['Gateway', 'HTTPRoute', 'GRPCRoute'])",message="targetRefs must use Gateway API Gateway, HTTPRoute, or GRPCRoute targets"
@@ -231,4 +242,12 @@ type TSZGuardrailPolicyList struct {
 
 func init() {
 	SchemeBuilder.Register(&TSZGuardrailPolicy{}, &TSZGuardrailPolicyList{})
+}
+
+// AdapterName returns the backwards-compatible default before API defaulting.
+func (s TSZGuardrailPolicySpec) AdapterName() string {
+	if s.Adapter == "" {
+		return "envoy-gateway"
+	}
+	return s.Adapter
 }

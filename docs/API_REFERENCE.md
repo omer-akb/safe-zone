@@ -705,6 +705,18 @@ manifests need only an `apiVersion` change. See the
 [policy API upgrade guide](operations/TSZ_POLICY_API_UPGRADE.md) for compatibility
 evidence, storage migration, supported rollback and the remaining GA feedback gates.
 
+#### Native gateway adapter selector
+
+`TSZGuardrailPolicy.spec.adapter` selects an installed native adapter. It defaults
+to `envoy-gateway`, accepts a DNS-label name up to 63 characters, and is immutable.
+Both served API versions expose the same field. The shipped controller registers
+only `envoy-gateway`; other names report `Accepted=False` and `Programmed=False`
+with reason `UnsupportedCapability`. Requested actions and target/section scopes
+must be supported by that adapter, including actions in referenced snapshots.
+Existing native resources remain unchanged when a new generation is rejected.
+See [native adapter selection](integrations/NATIVE_GATEWAY_ADAPTERS.md) for the
+extension boundary, compatibility and Phase 7 scope.
+
 #### Response contract
 
 For a strict no-leakage guarantee, use supported buffered, non-streaming OpenAI,

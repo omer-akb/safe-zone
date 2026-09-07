@@ -54,6 +54,19 @@ spec:
           spec:
             description: TSZGuardrailPolicySpec declares one policy attachment.
             properties:
+              adapter:
+                default: envoy-gateway
+                description: |-
+                  Adapter selects an installed native gateway adapter. Omission preserves
+                  existing Envoy attachments. Recreate the policy to change adapters so
+                  generated resources and runtime ownership cannot be orphaned.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+                x-kubernetes-validations:
+                - message: adapter is immutable; recreate the policy to change adapters
+                  rule: self == oldSelf
               clientOverrides:
                 description: ClientOverridesSpec controls opt-in client behavior for
                   an attachment.
@@ -596,6 +609,19 @@ spec:
           spec:
             description: TSZGuardrailPolicySpec declares one policy attachment.
             properties:
+              adapter:
+                default: envoy-gateway
+                description: |-
+                  Adapter selects an installed native gateway adapter. Omission preserves
+                  existing Envoy attachments. Recreate the policy to change adapters so
+                  generated resources and runtime ownership cannot be orphaned.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+                x-kubernetes-validations:
+                - message: adapter is immutable; recreate the policy to change adapters
+                  rule: self == oldSelf
               clientOverrides:
                 description: ClientOverridesSpec controls opt-in client behavior for
                   an attachment.

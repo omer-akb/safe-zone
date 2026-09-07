@@ -74,7 +74,7 @@ func TestEnvtestReconcilerPublishesReferenceFailure(t *testing.T) {
 		t.Fatalf("create TSZGuardrailPolicy: %v", err)
 	}
 
-	reconciler := NewPolicyAttachmentReconciler(kubeClient, staticTargets{}, selector{}, missingReferenceResolver(), nil, &recordingEnvoy{})
+	reconciler := NewPolicyAttachmentReconciler(kubeClient, staticTargets{}, selector{}, missingReferenceResolver(), nil, testRegistry(t, &recordingEnvoy{}))
 	if _, err := reconciler.Reconcile(context.Background(), request(object)); err == nil {
 		t.Fatal("Reconcile() unexpectedly succeeded for a missing policy reference")
 	}

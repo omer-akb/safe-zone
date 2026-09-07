@@ -6,6 +6,7 @@ metadata:
   name: checkpoint-inline
   namespace: tsz-byg-demo
 spec:
+  adapter: envoy-gateway
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
