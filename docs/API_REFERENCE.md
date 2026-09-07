@@ -706,6 +706,7 @@ The supported non-streaming content fields are:
 | --- | --- | --- |
 | Chat Completions | String `messages[].content`, `text` fields in supported multimodal content arrays for system/user/assistant/tool messages, assistant `refusal` fields, and `messages[].tool_calls[].function.arguments` | String `choices[].message.content`, assistant `text`/`refusal` fields in content arrays, and `choices[].message.tool_calls[].function.arguments` |
 | Responses | String `instructions`, string `input`, `input_text`/`output_text`/`refusal` fields in supported message content arrays, `function_call.arguments`, and string or multimodal `function_call_output.output` in `input[]` | Assistant `output_text`, `refusal`, and `function_call.arguments` fields in `output[]`; top-level `output_text` is kept consistent when present |
+| Embeddings (OpenAI-compatible) | Non-empty string `input` or non-empty array of non-empty strings; every item is inspected independently | Input-only: vectors, usage and provider errors pass through unchanged |
 | Anthropic Messages | Top-level string or text-block `system`; user/assistant string and text-block content; `tool_use.input`; string or text-block `tool_result.content` | Assistant text blocks and `tool_use.input` |
 | Gemini GenerateContent | `systemInstruction` and `contents[].parts[].text`; `functionCall.args`, `functionResponse.response`, server `toolCall.args`/`toolResponse.response`, executable code and execution output | The corresponding supported fields in `candidates[].content.parts[]` |
 
@@ -729,6 +730,44 @@ This scope does **not** guarantee Responses, Anthropic, or Gemini streaming enfo
 Configure both request and response bodies as `Buffered`; do not attach this
 profile to a route that requires an unbuffered or Responses SSE safety
 guarantee.
+
+#### Embeddings input guardrails
+
+The BYG processor supports OpenAI-compatible `/v1/embeddings` and `/embeddings`
+request paths (including query strings). Envoy must forward the `:path` request
+header to ext_proc; other adapters must populate `ProcessingRequest.RequestPath`.
+The request path is retained for response processing and is never taken from
+response headers. Custom public paths must be rewritten to a supported path
+before TSZ inspection. Endpoint selection is necessary because Responses API
+requests also use `input`; model names are not used to guess the API.
+
+Each text input runs through the same pinned request policy as chat content:
+PII, secrets, custom patterns, allowlists, blocklists and configured validators.
+`ALLOW` and `AUDIT_ONLY` preserve the body; `MASK` replaces affected input strings
+and corrects `content-length`; a `BLOCK` in any item blocks the entire request.
+Array order, model, dimensions, encoding format and unrelated fields are preserved.
+Audit metadata uses adapter `openai_embeddings` and contains no input text.
+
+Example request through the protected gateway:
+
+```json
+{"model":"text-embedding-3-small","input":["ordinary text","contact alice@example.com"]}
+```
+
+With a PII masking policy, only the email in the second input is redacted before
+upstream delivery. A secret configured to block in any input prevents the whole
+request from reaching the provider. Validate this with the local mock provider
+and the existing route-owned policy setup.
+
+The [OpenAI embeddings API](https://developers.openai.com/api/reference/resources/embeddings/methods/create)
+also accepts token ID arrays. TSZ currently supports **text inputs only**: token
+ID arrays, mixed arrays, empty inputs and malformed JSON produce processing
+errors under the configured failure policy. Use `fail-closed` for enforcement;
+`fail-open` can forward uninspected inputs on an error. Token decoding and
+provider/model token-limit validation are not implemented by this adapter.
+Embedding responses are outside content inspection, including when response
+policies are enabled. This feature adds BYG inspection, not a standalone TSZ
+`POST /v1/embeddings` proxy endpoint. Use buffered processing.
 
 #### Envoy attachment and runtime settings
 

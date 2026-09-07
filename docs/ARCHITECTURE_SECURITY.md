@@ -197,6 +197,15 @@ guardrails to serialized arguments and returned text. Structured Anthropic and
 Gemini tool payload masks must remain valid JSON objects. Inspection does not
 authorize or execute tools, and it never changes tool identity.
 
+Embeddings support is input-only for OpenAI-compatible `/v1/embeddings` and
+`/embeddings` routes. Every string input is checked with the pinned request
+policy; any blocking item blocks the entire request. Token ID inputs cannot be
+inspected and produce processing errors subject to the configured failure mode.
+The original request path selects this adapter and is retained across the stream,
+so embedding vectors and provider error responses pass through unchanged without
+being interpreted as assistant text. Response headers cannot select this bypass.
+See the API reference for supported input shapes and routing requirements.
+
 #### Trust boundaries and policy authority
 
 - The client is untrusted. Its guardrail or policy headers never select the

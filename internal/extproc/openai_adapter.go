@@ -570,12 +570,13 @@ const (
 )
 
 type jsonNode struct {
-	kind        jsonNodeKind
-	start, end  int
-	stringValue string
-	boolean     bool
-	object      map[string]*jsonNode
-	array       []*jsonNode
+	kind          jsonNodeKind
+	start, end    int
+	stringValue   string
+	boolean       bool
+	object        map[string]*jsonNode
+	duplicateKeys bool
+	array         []*jsonNode
 }
 
 // jsonSourceParser validates JSON while retaining byte offsets. It is limited
@@ -644,6 +645,9 @@ func (p *jsonSourceParser) parseObject() (*jsonNode, error) {
 		value, err := p.parseValue()
 		if err != nil {
 			return nil, err
+		}
+		if _, exists := node.object[key.stringValue]; exists {
+			node.duplicateKeys = true
 		}
 		node.object[key.stringValue] = value
 		p.skipSpace()

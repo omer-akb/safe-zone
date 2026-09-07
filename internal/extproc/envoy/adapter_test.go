@@ -397,3 +397,23 @@ func responseBodyForAdapterTest(body []byte, endOfStream bool) *extprocv3.Proces
 		ResponseBody: &extprocv3.HttpBody{Body: body, EndOfStream: endOfStream},
 	}}
 }
+
+func TestRequestPathRetainedAcrossEmbeddingsTransaction(t *testing.T) {
+	state := newEnvoyStreamState()
+	headers := requestHeadersForAdapterTest(false)
+	headers.GetRequestHeaders().Headers = testHeaderMap([2]string{"content-type", "application/json"}, [2]string{":path", "/v1/embeddings?x=1"})
+	responseHeaders := responseHeadersForAdapterTest(false)
+	// An upstream response cannot replace the original request path.
+	responseHeaders.GetResponseHeaders().Headers = testHeaderMap([2]string{"content-type", "application/json"}, [2]string{":path", "/responses"})
+	for _, message := range []*extprocv3.ProcessingRequest{headers, requestBodyForAdapterTest([]byte(`{"input":"safe"}`), true), responseHeaders, responseBodyForAdapterTest([]byte(`{"data":[]}`), true)} {
+		request, _, err := requestFromEnvoy(message, state)
+		if err != nil || request.RequestPath != "/v1/embeddings?x=1" {
+			t.Fatalf("path=%q err=%v", request.RequestPath, err)
+		}
+	}
+	other := newEnvoyStreamState()
+	request, _, err := requestFromEnvoy(requestHeadersForAdapterTest(false), other)
+	if err != nil || request.RequestPath != "" {
+		t.Fatalf("path leaked across streams: %q err=%v", request.RequestPath, err)
+	}
+}

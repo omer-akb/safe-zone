@@ -160,6 +160,15 @@ func (p *OpenAIRequestProcessor) ProcessSSEWindow(ctx context.Context, request P
 }
 
 func (p *OpenAIRequestProcessor) processRequest(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	// Responses also accepts string input, so select embeddings by endpoint
+	// before attempting body-shape detection for other content adapters.
+	if isEmbeddingsRequest(request) {
+		payload, err := ParseEmbeddingsRequest(request.ContentType, request.Body)
+		if err != nil {
+			return ProcessingResult{}, err
+		}
+		return p.processProviderPayload(ctx, request, payload, false)
+	}
 	if isAnthropicMessagesRequest(request) {
 		anthropic, err := ParseAnthropicRequest(request.ContentType, request.Body)
 		if err != nil {
@@ -252,6 +261,13 @@ func (p *OpenAIRequestProcessor) processChatRequest(ctx context.Context, request
 }
 
 func (p *OpenAIRequestProcessor) processResponse(ctx context.Context, request ProcessingRequest) (ProcessingResult, error) {
+	if isEmbeddingsRequest(request) {
+		// Embeddings support is input-only. Preserve vectors and provider error
+		// responses; neither is assistant text requiring output inspection.
+		result := ProcessingResult{Action: ActionAllow}
+		result.Metadata = providerResultMetadata(request, embeddingsProvider, result, nil, time.Now())
+		return result, nil
+	}
 	chat, err := ParseChatResponse(request.ContentType, request.Body)
 	if err == nil {
 		return p.processChatResponse(ctx, request, chat)

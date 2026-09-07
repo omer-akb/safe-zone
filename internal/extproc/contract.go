@@ -46,8 +46,11 @@ func (stage ProcessingStage) Validate() error {
 }
 
 type ProcessingRequest struct {
-	RID        string
-	EnvoyReqID string
+	// RequestPath is the original request URI, retained for response processing.
+	// Adapters must derive it from request routing data, never response headers.
+	RequestPath string
+	RID         string
+	EnvoyReqID  string
 	// TraceID remains empty unless a future trusted gateway source supplies it.
 	// Client-controlled trace headers are intentionally not trusted here.
 	TraceID string
